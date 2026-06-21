@@ -1,0 +1,131 @@
+# ============ 依赖与构建产物 ============
+
+# Node.js 依赖
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# 前端构建产物 (Vite)
+dist/
+dist-ssr/
+*.local
+
+# Rust 构建产物 (Tauri 后端)
+src-tauri/target/
+
+# Tauri 自动生成代码
+src-tauri/gen/schemas/
+
+# 说明：Tauri 是二进制应用，官方建议提交 Cargo.lock 以保证可复现构建，
+# 因此此处不忽略 src-tauri/Cargo.lock。
+
+# ============ 环境与配置 ============
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Tauri 本地配置（如有）
+src-tauri/.cargo/config.toml
+src-tauri/tauri.conf.local.json
+
+# ============ 日志与缓存 ============
+
+# 前端日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# 缓存
+.eslintcache
+.cache
+.parcel-cache
+.vite/
+.turbo
+
+# 测试覆盖率
+coverage/
+*.lcov
+.nyc_output
+
+# ============ IDE 与编辑器 ============
+
+# VSCode
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# 其他编辑器
+*.swp
+*.swo
+*~
+.fleet/
+.cursor/
+
+# ============ 操作系统 ============
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.Trash-*
+
+# ============ 项目特定 ============
+
+# AI 助手记忆目录（个人调试 / 上下文记录，不应纳入版本控制）
+.workbuddy/
+
+# 照片库索引/数据库（运行时生成，用户私有）
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+photolib.db
+*.thumb-cache
+thumbs/
+
+# 临时与备份文件
+*.bak
+*.tmp
+*.orig
+*.rej
+
+# 大型二进制（示例图片、原图等，按需启用）
+# *.psd
+# *.raw
+# *.tif
