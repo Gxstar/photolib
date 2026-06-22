@@ -42,18 +42,27 @@ pub fn scan_directory_shallow_with_meta(dir: &Path) -> Vec<FileMeta> {
             let name = path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let size = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.len().try_into().ok())
-                .unwrap_or(0i64);
-            let modified = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
             let media_type = get_media_type(&path).unwrap_or_default();
-            let (width, height) = quick_jpeg_dims(&path);
+
+            // 一次 metadata 同时取 size + modified，省掉一次 syscall
+            let (size, modified) = match std::fs::metadata(&path) {
+                Ok(m) => {
+                    let s = m.len() as i64;
+                    let t = m.modified().ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    (s, t)
+                }
+                Err(_) => (0, 0),
+            };
+
+            // 只对 JPEG 读头部尺寸：RAW/PNG 等格式不解析，省一次 File::open
+            let (width, height) = if media_type == "jpeg" {
+                quick_jpeg_dims(&path)
+            } else {
+                (None, None)
+            };
 
             files.push(FileMeta {
                 path: path.to_string_lossy().to_string(),

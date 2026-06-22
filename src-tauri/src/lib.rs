@@ -46,6 +46,7 @@ pub fn run() {
             commands::reload_directory,
             commands::extract_exif_batch,
             commands::get_thumbnail,
+            commands::get_thumbnail_path,
             commands::preload_thumbnails,
             commands::get_albums,
             commands::add_album,

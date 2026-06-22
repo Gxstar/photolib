@@ -1,6 +1,90 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ========== Light Theme (Default) ========== */
+:root {
+  --surface-0: #ffffff;
+  --surface-50: #fafafa;
+  --surface-100: #f5f5f5;
+  --surface-200: #e8e8e8;
+  --surface-300: #d4d4d4;
+  --surface-400: #a8a8a8;
+  --surface-500: #737373;
+  --surface-600: #595959;
+  --surface-700: #404040;
+  --surface-800: #262626;
+  --surface-900: #171717;
+  --surface-950: #0a0a0a;
+
+  --accent-50: #f0f7ff;
+  --accent-100: #e0effe;
+  --accent-200: #b9dffe;
+  --accent-300: #7ccbfd;
+  --accent-400: #36b3fa;
+  --accent-500: #0c9cf0;
+  --accent-600: #027dd0;
+  --accent-700: #0464a8;
+  --accent-800: #09548b;
+  --accent-900: #0d4773;
+
+  --brand-50: #fef7ee;
+  --brand-100: #fdeed7;
+  --brand-200: #fad9ae;
+  --brand-300: #f6be7a;
+  --brand-400: #f19c44;
+  --brand-500: #ee8221;
+  --brand-600: #e06817;
+  --brand-700: #ba4f15;
+  --brand-800: #943f19;
+  --brand-900: #773518;
+
+  --shadow-color: rgba(0, 0, 0, 0.06);
+  --overlay-bg: rgba(255, 255, 255, 0.85);
+}
+
+/* ========== Dark Theme ========== */
+.dark {
+  --surface-0: #0f0f11;
+  --surface-50: #18181b;
+  --surface-100: #1f1f23;
+  --surface-200: #27272a;
+  --surface-300: #3f3f46;
+  --surface-400: #52525b;
+  --surface-500: #71717a;
+  --surface-600: #a1a1aa;
+  --surface-700: #d4d4d8;
+  --surface-800: #e4e4e7;
+  --surface-900: #f4f4f5;
+  --surface-950: #fafafa;
+
+  --accent-50: #0c2e4e;
+  --accent-100: #0e3a63;
+  --accent-200: #104a7d;
+  --accent-300: #13609e;
+  --accent-400: #1a7bc4;
+  --accent-500: #2b95e0;
+  --accent-600: #52adf0;
+  --accent-700: #7dc2f5;
+  --accent-800: #b0d9fa;
+  --accent-900: #e0f0fe;
+
+  --brand-50: #4a2510;
+  --brand-100: #5c3014;
+  --brand-200: #753e19;
+  --brand-300: #955020;
+  --brand-400: #b8662a;
+  --brand-500: #d4823e;
+  --brand-600: #e09e5e;
+  --brand-700: #e8b880;
+  --brand-800: #f0d2aa;
+  --brand-900: #f8ead4;
+
+  --shadow-color: rgba(0, 0, 0, 0.4);
+  --overlay-bg: rgba(15, 15, 17, 0.9);
+}
 
 * {
   margin: 0;
@@ -11,14 +95,20 @@
 html, body, #root {
   height: 100%;
   overflow: hidden;
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Smooth theme transitions */
+html, body, div, span, button, input, select, label, p, a {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
+}
+
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -26,25 +116,29 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(115, 115, 115, 0.4);
-  border-radius: 3px;
+  background: var(--surface-300);
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(115, 115, 115, 0.6);
+  background: var(--surface-400);
 }
 
 /* Thumbnail grid cell */
 .thumb-cell {
-  @apply relative cursor-pointer rounded-md overflow-hidden border-2 border-transparent transition-all duration-150;
+  @apply relative cursor-pointer rounded-lg overflow-hidden border-2 border-transparent transition-all duration-200;
 }
 
 .thumb-cell:hover {
-  @apply border-accent-400;
+  border-color: var(--accent-400);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--shadow-color);
 }
 
 .thumb-cell.selected {
-  @apply border-accent-500 bg-accent-500/10;
+  border-color: var(--accent-500);
+  background-color: var(--accent-50);
+  box-shadow: 0 0 0 3px var(--accent-100);
 }
 
 /* Rating stars */
@@ -54,9 +148,71 @@ html, body, #root {
 
 /* Filter slider */
 .filter-range {
-  @apply w-full h-1.5 bg-surface-700 rounded-full appearance-none cursor-pointer;
+  @apply w-full h-1.5 rounded-full appearance-none cursor-pointer;
+  background: var(--surface-200);
 }
 
 .filter-range::-webkit-slider-thumb {
-  @apply appearance-none w-4 h-4 rounded-full bg-accent-500 cursor-pointer;
+  @apply appearance-none w-4 h-4 rounded-full cursor-pointer transition-transform;
+  background: var(--accent-500);
+  box-shadow: 0 1px 3px var(--shadow-color);
+}
+
+.filter-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* Custom checkbox */
+.custom-checkbox {
+  @apply w-3.5 h-3.5 rounded border cursor-pointer appearance-none transition-all duration-150;
+  border-color: var(--surface-300);
+  background: var(--surface-0);
+}
+
+.custom-checkbox:checked {
+  background: var(--accent-500);
+  border-color: var(--accent-500);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+  background-size: 75%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Panel glass effect for light theme */
+.glass-panel {
+  background: var(--surface-0);
+}
+
+.dark .glass-panel {
+  background: var(--surface-50);
+}
+
+/* Input focus ring */
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-100);
+}
+
+/* Button press effect */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
 }

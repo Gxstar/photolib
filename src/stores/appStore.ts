@@ -1,5 +1,29 @@
 import { create } from "zustand";
+import { listen } from "@tauri-apps/api/event";
 import type { Photo, FilterState, ViewMode, Folder, DirectoryEntry, LeftPanelTab } from "../types";
+
+export interface ExifPatch {
+  id: number;
+  filePath: string;
+  dateTaken?: string | null;
+  cameraMake?: string | null;
+  cameraModel?: string | null;
+  lensModel?: string | null;
+  focalLength?: number | null;
+  aperture?: number | null;
+  shutterSpeed?: string | null;
+  iso?: number | null;
+  exposureComp?: number | null;
+  flash?: number | null;
+  whiteBalance?: string | null;
+  meteringMode?: string | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
+  colorSpace?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  altitude?: number | null;
+}
 
 interface AppState {
   // Loading & Error
@@ -11,6 +35,12 @@ interface AppState {
   // Photos
   photos: Photo[];
   setPhotos: (photos: Photo[]) => void;
+  patchPhotos: (patches: ExifPatch[]) => void;
+
+  // Theme
+  theme: "light" | "dark";
+  toggleTheme: () => void;
+  setTheme: (theme: "light" | "dark") => void;
 
   // Left panel tabs
   leftTab: LeftPanelTab;
@@ -79,6 +109,15 @@ const defaultFilter: FilterState = {
   searchText: "",
 };
 
+function getInitialTheme(): "light" | "dark" {
+  if (typeof window !== "undefined") {
+    const saved = localStorage.getItem("photolib-theme") as "light" | "dark" | null;
+    if (saved) return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "light";
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   isLoading: false,
   setLoading: (loading) => set({ isLoading: loading }),
@@ -87,6 +126,66 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   photos: [],
   setPhotos: (photos) => set({ photos }),
+  patchPhotos: (patches) => {
+    if (patches.length === 0) return;
+    set((s) => {
+      // 用 Map 一次构建 O(n) 索引，避免 O(n*m) 查找
+      const patchById = new Map<number, ExifPatch>();
+      const patchByPath = new Map<string, ExifPatch>();
+      for (const p of patches) {
+        patchById.set(p.id, p);
+        patchByPath.set(p.filePath, p);
+      }
+      const next = s.photos.map((photo) => {
+        const patch = patchById.get(photo.id) || patchByPath.get(photo.filePath);
+        if (!patch) return photo;
+        // 只更新 patch 中提供的字段
+        const updated: Photo = { ...photo };
+        if (patch.dateTaken !== undefined) updated.dateTaken = patch.dateTaken || "";
+        if (patch.cameraMake !== undefined) updated.cameraMake = patch.cameraMake || "";
+        if (patch.cameraModel !== undefined) updated.cameraModel = patch.cameraModel || "";
+        if (patch.lensModel !== undefined) updated.lensModel = patch.lensModel || "";
+        if (patch.focalLength !== undefined) updated.focalLength = patch.focalLength || 0;
+        if (patch.aperture !== undefined) updated.aperture = patch.aperture || 0;
+        if (patch.shutterSpeed !== undefined) updated.shutterSpeed = patch.shutterSpeed || "";
+        if (patch.iso !== undefined) updated.iso = patch.iso || 0;
+        if (patch.exposureComp !== undefined) updated.exposureComp = patch.exposureComp || 0;
+        if (patch.flash !== undefined) updated.flash = patch.flash || 0;
+        if (patch.whiteBalance !== undefined) updated.whiteBalance = patch.whiteBalance || "";
+        if (patch.meteringMode !== undefined) updated.meteringMode = patch.meteringMode || "";
+        if (patch.imageWidth !== undefined) updated.imageWidth = patch.imageWidth || 0;
+        if (patch.imageHeight !== undefined) updated.imageHeight = patch.imageHeight || 0;
+        if (patch.colorSpace !== undefined) updated.colorSpace = patch.colorSpace || "";
+        if (patch.latitude !== undefined) updated.latitude = patch.latitude ?? null;
+        if (patch.longitude !== undefined) updated.longitude = patch.longitude ?? null;
+        if (patch.altitude !== undefined) updated.altitude = patch.altitude ?? null;
+        return updated;
+      });
+      return { photos: next };
+    });
+  },
+
+  // Theme
+  theme: getInitialTheme(),
+  toggleTheme: () => {
+    const newTheme = get().theme === "light" ? "dark" : "light";
+    localStorage.setItem("photolib-theme", newTheme);
+    if (newTheme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+    set({ theme: newTheme });
+  },
+  setTheme: (theme) => {
+    localStorage.setItem("photolib-theme", theme);
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+    set({ theme });
+  },
 
   // Left panel
   leftTab: "directory",
@@ -141,7 +240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   viewMode: "grid",
   setViewMode: (mode) => set({ viewMode: mode }),
-  thumbnailSize: 200,
+  thumbnailSize: 150,
   setThumbnailSize: (size) => set({ thumbnailSize: size }),
 
   filter: { ...defaultFilter },
@@ -154,7 +253,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
   toggleRightPanel: () => set((s) => ({ rightPanelOpen: !s.rightPanelOpen })),
 
-  sortBy: "dateTaken",
-  sortOrder: "desc",
+  sortBy: "fileName",
+  sortOrder: "asc",
   setSort: (by, order) => set({ sortBy: by, sortOrder: order }),
 }));

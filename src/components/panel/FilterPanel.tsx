@@ -1,11 +1,10 @@
 import { useAppStore } from "../../stores/appStore";
-import { X, RotateCcw } from "lucide-react";
-import { useState, useMemo } from "react";
+import { RotateCcw, SlidersHorizontal } from "lucide-react";
+import { useMemo } from "react";
 
 export function FilterPanel() {
   const { filter, setFilter, resetFilter, photos } = useAppStore();
 
-  // 从实际照片中动态取可选值
   const { cameraModels, lensModels } = useMemo(() => {
     const cams = [...new Set(photos.map(p => p.cameraModel).filter(Boolean))].sort();
     const lenses = [...new Set(photos.map(p => p.lensModel).filter(Boolean))].sort();
@@ -32,43 +31,47 @@ export function FilterPanel() {
 
   return (
     <div className="flex flex-col shrink-0 max-h-[45%]">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-surface-800 shrink-0">
-        <span className="text-[11px] font-semibold text-surface-400 uppercase tracking-wider">筛选器</span>
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-surface-200 dark:border-surface-200 shrink-0">
+        <div className="flex items-center gap-1.5">
+          <SlidersHorizontal size={12} className="text-surface-400" />
+          <span className="text-xs font-semibold text-surface-600 dark:text-surface-400 uppercase tracking-wider">筛选器</span>
+        </div>
         {hasActiveFilter && (
           <button
             onClick={resetFilter}
-            className="p-1 rounded hover:bg-surface-700 text-surface-400 hover:text-surface-200 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-surface-100 dark:hover:bg-surface-100 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-all text-2xs"
             title="重置筛选"
           >
-            <RotateCcw size={12} />
+            <RotateCcw size={10} />
+            重置
           </button>
         )}
       </div>
 
-      <div className="overflow-auto py-2 px-3 space-y-3 text-[11px]">
-        {/* 评分 */}
+      <div className="overflow-auto py-3 px-3 space-y-4 text-xs">
+        {/* Rating */}
         <FilterSection title="评分">
-          <div className="flex gap-0.5">
+          <div className="flex gap-1">
             {[0, 1, 2, 3, 4, 5].map((r) => (
               <button
                 key={r}
                 onClick={() => setFilter({ ratingMin: r === filter.ratingMin ? 0 : r })}
-                className={`px-1.5 py-0.5 rounded transition-colors ${
+                className={`flex-1 px-1.5 py-1 rounded-md text-2xs font-medium transition-all duration-150 ${
                   filter.ratingMin === r
-                    ? "bg-accent-500/30 text-accent-300"
-                    : "text-surface-400 hover:bg-surface-700"
+                    ? "bg-accent-500 text-white shadow-sm"
+                    : "bg-surface-100 dark:bg-surface-100 text-surface-500 hover:bg-surface-200 dark:hover:bg-surface-200"
                 }`}
               >
-                {r === 0 ? "全部" : "≥" + "★".repeat(r)}
+                {r === 0 ? "全部" : "★".repeat(r)}
               </button>
             ))}
           </div>
         </FilterSection>
 
-        {/* 相机型号 — 只有照片含数据时才显示 */}
+        {/* Camera models */}
         {cameraModels.length > 0 && (
           <FilterSection title={`相机 (${cameraModels.length})`}>
-            <div className="space-y-0.5 max-h-32 overflow-auto">
+            <div className="space-y-1 max-h-32 overflow-auto pr-1">
               {cameraModels.map((model) => (
                 <CheckboxRow
                   key={model}
@@ -86,10 +89,10 @@ export function FilterPanel() {
           </FilterSection>
         )}
 
-        {/* 镜头 */}
+        {/* Lens models */}
         {lensModels.length > 0 && (
           <FilterSection title={`镜头 (${lensModels.length})`}>
-            <div className="space-y-0.5 max-h-32 overflow-auto">
+            <div className="space-y-1 max-h-32 overflow-auto pr-1">
               {lensModels.map((lens) => (
                 <CheckboxRow
                   key={lens}
@@ -107,7 +110,7 @@ export function FilterPanel() {
           </FilterSection>
         )}
 
-        {/* 焦距 */}
+        {/* Focal length */}
         <FilterSection title={`焦距: ${filter.focalLengthMin}-${filter.focalLengthMax}mm`}>
           <RangeSlider
             min={0}
@@ -117,7 +120,7 @@ export function FilterPanel() {
           />
         </FilterSection>
 
-        {/* 光圈 */}
+        {/* Aperture */}
         <FilterSection title={`光圈: f/${filter.apertureMin}-f/${filter.apertureMax}`}>
           <RangeSlider
             min={0}
@@ -138,7 +141,7 @@ export function FilterPanel() {
           />
         </FilterSection>
 
-        {/* 旗标 */}
+        {/* Flag */}
         <FilterSection title="旗标">
           <div className="flex gap-1">
             {[
@@ -149,10 +152,10 @@ export function FilterPanel() {
               <button
                 key={f.value}
                 onClick={() => setFilter({ flag: filter.flag === f.value ? "" : f.value })}
-                className={`px-2 py-0.5 rounded transition-colors ${
+                className={`flex-1 px-2 py-1 rounded-md text-2xs font-medium transition-all duration-150 ${
                   filter.flag === f.value
-                    ? "bg-accent-500/30 text-accent-300"
-                    : "text-surface-400 hover:bg-surface-700"
+                    ? "bg-accent-500 text-white shadow-sm"
+                    : "bg-surface-100 dark:bg-surface-100 text-surface-500 hover:bg-surface-200 dark:hover:bg-surface-200"
                 }`}
               >
                 {f.label}
@@ -161,9 +164,9 @@ export function FilterPanel() {
           </div>
         </FilterSection>
 
-        {/* 色标 */}
+        {/* Color labels */}
         <FilterSection title="色标">
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             {[
               { label: "红", value: "red", color: "#ef4444" },
               { label: "蓝", value: "blue", color: "#3b82f6" },
@@ -179,10 +182,10 @@ export function FilterPanel() {
                     : [...filter.colorLabels, c.value];
                   setFilter({ colorLabels: labels });
                 }}
-                className={`w-5 h-5 rounded-full border-2 transition-all ${
+                className={`w-6 h-6 rounded-full border-2 transition-all duration-150 ${
                   filter.colorLabels.includes(c.value)
-                    ? "border-white scale-110"
-                    : "border-transparent opacity-50 hover:opacity-80"
+                    ? "border-surface-800 dark:border-white scale-110 shadow-md"
+                    : "border-transparent opacity-40 hover:opacity-70"
                 }`}
                 style={{ backgroundColor: c.color }}
                 title={c.label}
@@ -198,7 +201,7 @@ export function FilterPanel() {
 function FilterSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-[10px] text-surface-500 uppercase tracking-wider block mb-1">{title}</label>
+      <label className="text-2xs font-semibold text-surface-400 uppercase tracking-wider block mb-1.5">{title}</label>
       {children}
     </div>
   );
@@ -214,14 +217,14 @@ function CheckboxRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-1.5 cursor-pointer text-surface-300 hover:text-surface-100">
+    <label className="flex items-center gap-2 cursor-pointer text-surface-600 dark:text-surface-400 hover:text-surface-800 dark:hover:text-surface-200 py-0.5 transition-colors">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="w-3 h-3 rounded border-surface-600 bg-surface-800 accent-accent-500"
+        className="custom-checkbox"
       />
-      <span className="truncate">{label}</span>
+      <span className="truncate text-xs">{label}</span>
     </label>
   );
 }

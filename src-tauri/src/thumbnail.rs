@@ -1,9 +1,11 @@
 // 缩略图模块 — 高性能缩略图生成
 //
 // 优化策略（对标 Windows 资源管理器 / XnView MP）：
-//   1. 快路径：手动解析 JPEG APP1 段提取 EXIF 内嵌缩略图（O(64KB)，~5ms）— 95% 命中
-//   2. 慢路径：全量解码 + Triangle 快速缩放 + Orientation 校正（~50ms）— 5% 回退
-//   3. 缓存：磁盘缓存 + 版本化 key（v3），避免重新生成旧版错误缩略图
+//   1. 快路径：JPEG APP1 EXIF 内嵌缩略图（~5ms）
+//   2. RAW 路径：TIFF IFD1 嵌缩图 + RW2 JPEG blob 扫描
+//   3. JPEG 扫描路径：ISOBMFF 文件中扫 SOI→EOI（HEIC/HEIF 内嵌 JPEG 预览）
+//   4. WIC 路径：Windows Imaging Component 系统 API（AVIF/HEIC，仅 Windows，零 C 依赖）
+//   5. 缓存：磁盘缓存 v6
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
@@ -12,358 +14,252 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-/// 缩略图级别
-pub enum ThumbLevel {
-    L1, // 480px — 网格浏览
-    L2, // 1920px — 单张预览
-}
+pub enum ThumbLevel { L1, L2 }
 
-/// 生成缩略图，返回 JPEG 字节数据
-///
-/// 快路径（EXIF 内嵌缩略图）：
-///   直接从 JPEG 文件的 APP1 段解析 TIFF IFD1 ，
-///   提取 JPEGInterchangeFormat 指向的内嵌缩略图 JPEG 字节。
-///   内嵌缩略图通常是相机固件预生成的（160-320px），解码只需 O(160px)，~5ms。
-///
-/// 慢路径（全量解码回退）：
-///   image::open 全量解码 + EXIF Orientation 旋转 +
-///   Triangle 滤镜缩放（比 Lanczos3 快 2-3×） + JPEG 编码。
 pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Vec<u8>> {
-    let target_long = match level {
-        ThumbLevel::L1 => 480u32,
-        ThumbLevel::L2 => 1920u32,
-    };
-    let quality = match level {
-        ThumbLevel::L1 => 70u8,
-        ThumbLevel::L2 => 85u8,
-    };
-
-    // ===== 快路径：EXIF 内嵌缩略图 =====
-    if let Ok(data) = try_embedded_thumbnail(source, target_long, quality) {
-        return Ok(data);
-    }
-
-    // ===== 慢路径：全量解码 + Orientation 校正 =====
-    let img = image::open(source)?;
-
-    // 读取并应用 EXIF Orientation
-    let orientation = read_orientation(source).unwrap_or(1);
-    let img = apply_orientation(img, orientation);
-
-    // 缩放（Triangle 比 Lanczos3 快 2-3×，缩略图场景差异可忽略）
-    let needs_resize = img.width() > target_long || img.height() > target_long;
-    let scaled = if needs_resize {
-        img.resize(target_long, u32::MAX, FilterType::Triangle)
-    } else {
-        img
-    };
-
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
-    encoder.encode(
-        scaled.as_bytes(),
-        scaled.width(),
-        scaled.height(),
-        scaled.color().into(),
-    )?;
-
-    Ok(buffer)
+    let (tl, q) = match level { ThumbLevel::L1 => (480u32, 70u8), ThumbLevel::L2 => (1920u32, 85u8) };
+    if let Ok(d) = try_embedded_thumbnail(source, tl, q) { return Ok(d); }
+    if let Ok(d) = try_raw_tiff_thumbnail(source, tl, q) { return Ok(d); }
+    if let Ok(d) = try_jpeg_scan_thumbnail(source, tl, q) { return Ok(d); }
+    if let Ok(d) = try_wic_api_thumbnail(source, tl, q) { return Ok(d); }
+    Err(anyhow::anyhow!("unsupported: {:?}", source))
 }
 
-// ===========================
-//  快路径：EXIF 内嵌缩略图
-//  直接从 JPEG 字节中解析 APP1 → TIFF IFD1 → JPEGInterchangeFormat
-//  零外部依赖，仅依赖 std。
-// ===========================
+// ===================== 1/4 JPEG EXIF =====================
 
-/// 尝试从 JPEG 的 EXIF APP1 段中提取内嵌缩略图字节
-fn try_embedded_thumbnail(source: &Path, target_long: u32, quality: u8) -> anyhow::Result<Vec<u8>> {
-    let file_data = fs::read(source)?;
-    let thumb_jpeg = extract_exif_thumbnail_jpeg(&file_data)
-        .ok_or_else(|| anyhow::anyhow!("no embedded thumbnail"))?;
-
-    if thumb_jpeg.is_empty() {
-        return Err(anyhow::anyhow!("empty thumbnail"));
-    }
-
-    // 解码内嵌缩略图（极小 JPEG，通常 5-50KB）
-    let thumb_img = image::load_from_memory(thumb_jpeg)?;
-    let long_edge = thumb_img.width().max(thumb_img.height());
-
-    // 尺寸不足目标 1/4 → 放弃，走慢路径保证清晰度
-    if long_edge < target_long / 4 {
-        return Err(anyhow::anyhow!("embedded thumbnail too small ({}px)", long_edge));
-    }
-
-    // 缩放到目标尺寸
-    let final_img = if long_edge > target_long || long_edge < target_long / 2 {
-        thumb_img.resize(target_long, u32::MAX, FilterType::Triangle)
-    } else {
-        thumb_img
-    };
-
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
-    encoder.encode(
-        final_img.as_bytes(),
-        final_img.width(),
-        final_img.height(),
-        final_img.color().into(),
-    )?;
-
-    Ok(buffer)
+fn try_embedded_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    // 嵌入的 EXIF 缩略图（含 APP1 段）通常在文件前 256KB 内
+    let d = read_file_head(source)?;
+    let j = extract_exif_thumbnail_jpeg(&d).ok_or_else(|| anyhow::anyhow!("no EXIF thumb"))?;
+    decode_resize_encode(j, tl, q)
 }
 
-/// 解析 JPEG 文件 → 提取 EXIF 内嵌缩略图 JPEG 数据
-///
-/// 流程：
-///   1. 找 APP1 marker (FF E1) → 确认 "Exif\0\0" 头
-///   2. 解析 TIFF 头 → 确定字节序（II=LE / MM=BE）
-///   3. 遍历 IFD0 → 找到 IFD1 偏移（通常就是 thumbnail IFD）
-///   4. 在 IFD1 中查找 tag 0x0201 (JPEGInterchangeFormat) 和 0x0202 (JPEGInterchangeFormatLength)
-///   5. 从 TIFF buffer 中截取 [offset..offset+len] — 这就是一张完整的 JPEG
-fn extract_exif_thumbnail_jpeg(jpeg_data: &[u8]) -> Option<&[u8]> {
-    // 确认 JPEG 头
-    if jpeg_data.len() < 4 || jpeg_data[0] != 0xFF || jpeg_data[1] != 0xD8 {
-        return None;
-    }
-
-    let len = jpeg_data.len();
-    let mut pos: usize = 2; // 跳过 SOI
-
-    while pos + 4 <= len {
-        if jpeg_data[pos] != 0xFF {
-            return None;
+fn extract_exif_thumbnail_jpeg(d: &[u8]) -> Option<&[u8]> {
+    if d.len() < 4 || d[0] != 0xFF || d[1] != 0xD8 { return None; }
+    let mut p = 2;
+    while p + 4 <= d.len() {
+        if d[p] != 0xFF { return None; } let m = d[p+1];
+        if m == 0xDA { break; }
+        let sl = ((d[p+2] as usize) << 8) | (d[p+3] as usize);
+        if sl < 2 || p + 2 + sl > d.len() { break; }
+        if m == 0xE1 { let seg = &d[p+4..p+2+sl];
+            if seg.len() >= 6 && &seg[0..6] == b"Exif\x00\x00" { if let Some(t) = parse_tiff_thumbnail(&seg[6..]) { return Some(t); } }
         }
+        p += 2 + sl;
+    } None
+}
 
-        let marker = jpeg_data[pos + 1];
+// ===================== 2/4 RAW TIFF =====================
 
-        // SOS (FF DA) — 图像数据开始，停止扫描 marker
-        if marker == 0xDA {
-            break;
-        }
+/// RAW 文件嵌入缩略图通常集中在文件头 1.5MB 内（EXIF MakerNote 之前）
+/// 读取整个 30-80MB 的 RAW 文件是不必要的
+const RAW_HEAD_READ_LIMIT: usize = 2 * 1024 * 1024; // 2MB
 
-        // marker 长度 (big-endian u16)，不包括 marker 本身 2 字节
-        let seg_len = ((jpeg_data[pos + 2] as usize) << 8) | (jpeg_data[pos + 3] as usize);
-        if seg_len < 2 || pos + 2 + seg_len > len {
-            break;
-        }
+fn read_file_head(source: &Path) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut file = fs::File::open(source)?;
+    let mut buf = vec![0u8; RAW_HEAD_READ_LIMIT];
+    let n = file.read(&mut buf)?;
+    buf.truncate(n);
+    Ok(buf)
+}
 
-        // APP1 (FF E1) — EXIF
-        if marker == 0xE1 {
-            let seg_start = pos + 4;
-            let seg_end = pos + 2 + seg_len;
-            let seg_data = &jpeg_data[seg_start..seg_end];
+fn try_raw_tiff_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    let d = read_file_head(source)?;
+    if d.len() < 8 || !is_tiff_magic(&d[0..4]) { return Err(anyhow::anyhow!("not TIFF")); }
+    if let Ok(r) = try_standard_tiff_thumbnail(&d, tl, q) { return Ok(r); }
+    if let Ok(r) = try_rw2_blob_thumbnail(&d, tl, q) { return Ok(r); }
+    Err(anyhow::anyhow!("no thumb in TIFF"))
+}
 
-            // 必须 >= 6 字节 ("Exif\0\0")
-            if seg_data.len() >= 6 && &seg_data[0..6] == b"Exif\x00\x00" {
-                let tiff_data = &seg_data[6..];
-                if let Some(thumb) = parse_tiff_thumbnail(tiff_data) {
-                    return Some(thumb);
+fn try_standard_tiff_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    let j = parse_tiff_thumbnail(d).ok_or_else(|| anyhow::anyhow!("no IFD1 thumb"))?;
+    decode_resize_encode(j, tl, q)
+}
+
+fn try_rw2_blob_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    if &d[0..4] != b"IIU\0" { return Err(anyhow::anyhow!("not RW2")); }
+    let off = u32::from_le_bytes([d[4],d[5],d[6],d[7]]) as usize;
+    if off+2 > d.len() { return Err(anyhow::anyhow!("bad IFD0")); }
+    let n = u16::from_le_bytes([d[off],d[off+1]]) as usize;
+    let end = off+2+n*12+4;
+    if end >= d.len() { return Err(anyhow::anyhow!("IFD0 past EOF")); }
+    if let Some(j) = scan_jpeg_in_file(d, end+8, 256*1024) { return decode_resize_encode(j, tl, q); }
+    Err(anyhow::anyhow!("no JPEG in RW2"))
+}
+
+// ===================== 3/4 JPEG scan (HEIC/HEIF) =====================
+
+fn try_jpeg_scan_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    // HEIC/HEIF 的预览 JPEG 一般在文件前部（meta box 内）
+    let d = read_file_head(source)?;
+    if d.len() < 12 || &d[4..8] != b"ftyp" { return Err(anyhow::anyhow!("not ISOBMFF")); }
+    if let Some(j) = scan_jpeg_in_file(&d, 0, 512*1024) { return decode_resize_encode(j, tl, q); }
+    Err(anyhow::anyhow!("no JPEG in ISOBMFF"))
+}
+
+fn scan_jpeg_in_file(d: &[u8], start: usize, max: usize) -> Option<&[u8]> {
+    let end = (start + max).min(d.len());
+    let mut i = start;
+    while i + 4 < end {
+        if d[i]==0xFF && d[i+1]==0xD8 && d[i+2]==0xFF {
+            let m3 = d[i+3];
+            if m3==0xE0 || m3==0xE1 || m3==0xDB || (m3>=0xC0 && m3<=0xCF) {
+                if let Some(sz) = parse_jpeg_chain(&d[i..(i+512*1024).min(d.len())]) {
+                    if sz>500 && sz<512*1024 { return Some(&d[i..i+sz]); }
                 }
             }
-        }
-
-        // 跳到下一个 marker：pos + 2 (marker) + seg_len
-        pos += 2 + seg_len;
-    }
-
-    None
+        } i += 1;
+    } None
 }
 
-/// 解析 TIFF 结构 → 提取内嵌缩略图 JPEG 字节
-///
-/// TIFF IFD 结构:
-///   2 bytes: entry count (N)
-///   N × 12 bytes: entries (tag/type/count/value)
-///   4 bytes: offset to next IFD (0 = no more)
-///
-/// IFD0 → IFD1 (thumbnail IFD) → tag 0x0201 (JPEGInterchangeFormat)
-fn parse_tiff_thumbnail(tiff_data: &[u8]) -> Option<&[u8]> {
-    if tiff_data.len() < 8 {
-        return None;
-    }
+fn parse_jpeg_chain(d: &[u8]) -> Option<usize> {
+    if d.len()<4 || d[0]!=0xFF || d[1]!=0xD8 { return None; }
+    let mut p = 2usize;
+    while p+1 < d.len() {
+        if d[p]!=0xFF { p+=1; continue; }
+        let mut m = d[p+1];
+        while m==0xFF && p+1<d.len() { p+=1; m=d[p+1]; }
+        match m {
+            0xD8 => p+=2, 0xD9 => return Some(p+2), 0xD0..=0xD7 => p+=2,
+            0xDA => { if p+4>d.len() { return None; }
+                let sl = u16::from_be_bytes([d[p+2],d[p+3]]) as usize;
+                if sl<2 || p+2+sl>d.len() { return None; }
+                p+=2+sl; while p+1<d.len() && !(d[p]==0xFF && d[p+1]!=0x00 && d[p+1]!=0xFF) { p+=1; } }
+            _ => { if p+4>d.len() { return None; }
+                let sl = u16::from_be_bytes([d[p+2],d[p+3]]) as usize;
+                if sl<2 || p+2+sl>d.len() { return None; } p+=2+sl; }
+        }
+    } None
+}
 
-    let le = match &tiff_data[0..2] {
-        b"II" => true,  // Intel / little-endian
-        b"MM" => false, // Motorola / big-endian
-        _ => return None,
+// ===================== 4/4 WIC (Windows only) =====================
+
+#[cfg(target_os = "windows")]
+fn try_wic_api_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    use windows::core::*;
+    use windows::Win32::Foundation::GENERIC_ACCESS_RIGHTS;
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::*;
+    use std::os::windows::ffi::OsStrExt;
+
+    unsafe { let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED); }
+    let factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }
+        .map_err(|e| anyhow::anyhow!("WIC factory: {}", e))?;
+    let path_wide: Vec<u16> = source.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let decoder: IWICBitmapDecoder = unsafe { factory.CreateDecoderFromFilename(PCWSTR::from_raw(path_wide.as_ptr()), None,
+        GENERIC_ACCESS_RIGHTS(0x80000000u32), WICDecodeMetadataCacheOnDemand) }
+        .map_err(|e| anyhow::anyhow!("WIC decoder: {}", e))?;
+    let frame: IWICBitmapFrameDecode = unsafe { decoder.GetFrame(0) }
+        .map_err(|e| anyhow::anyhow!("WIC frame: {}", e))?;
+    let (mut w, mut h) = (0u32, 0u32);
+    unsafe { frame.GetSize(&mut w, &mut h) }.map_err(|e| anyhow::anyhow!("WIC size: {}", e))?;
+
+    // ✅ 在解码管线中直接缩放，避免解码全分辨率再 resize
+    let scale_ratio = tl as f64 / w.max(h) as f64;
+    let (out_w, out_h) = if scale_ratio < 1.0 {
+        ((w as f64 * scale_ratio) as u32, (h as f64 * scale_ratio) as u32)
+    } else {
+        (w, h)
     };
+    let out_w = out_w.max(1);
+    let out_h = out_h.max(1);
 
-    let ifd0_offset = read_u32(tiff_data, 4, le) as usize;
-    if ifd0_offset == 0 || ifd0_offset + 2 > tiff_data.len() {
-        return None;
-    }
+    let scaler: IWICBitmapScaler = unsafe { factory.CreateBitmapScaler() }
+        .map_err(|e| anyhow::anyhow!("WIC scaler: {}", e))?;
+    unsafe { scaler.Initialize(&frame, out_w, out_h, WICBitmapInterpolationModeFant) }
+        .map_err(|e| anyhow::anyhow!("WIC scale init: {}", e))?;
 
-    // 遍历 IFD0 → 找到 IFD1 偏移 (thumbnail IFD)
-    let ifd1_offset = read_ifd_next(tiff_data, ifd0_offset, le);
-    if ifd1_offset == 0 || ifd1_offset + 2 > tiff_data.len() {
-        return None;
-    }
+    let converter: IWICFormatConverter = unsafe { factory.CreateFormatConverter() }
+        .map_err(|e| anyhow::anyhow!("WIC converter: {}", e))?;
+    unsafe { converter.Initialize(&scaler, &GUID_WICPixelFormat32bppBGRA,
+        WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom) }
+        .map_err(|e| anyhow::anyhow!("WIC convert: {}", e))?;
 
-    // 在 IFD1 中查找 JPEGInterchangeFormat (0x0201) 和 JPEGInterchangeFormatLength (0x0202)
-    let num_entries = read_u16(tiff_data, ifd1_offset, le) as usize;
-    let mut jpeg_offset: Option<u32> = None;
-    let mut jpeg_len: Option<u32> = None;
-
-    for i in 0..num_entries {
-        let entry_base = ifd1_offset + 2 + i * 12;
-        if entry_base + 12 > tiff_data.len() {
-            break;
-        }
-
-        let tag = read_u16(tiff_data, entry_base, le);
-        // field_type and count aren't strictly needed but we check count > 0
-        let count = read_u32(tiff_data, entry_base + 4, le);
-        let value = read_u32(tiff_data, entry_base + 8, le);
-
-        if tag == 0x0201 && count > 0 {
-            // JPEGInterchangeFormat — offset into tiff_data where JPEG thumbnail starts
-            jpeg_offset = Some(value);
-        }
-        if tag == 0x0202 && count > 0 {
-            // JPEGInterchangeFormatLength
-            jpeg_len = Some(value);
-        }
-    }
-
-    match (jpeg_offset, jpeg_len) {
-        (Some(off), Some(len)) => {
-            let start = off as usize;
-            let end = start + len as usize;
-            if end <= tiff_data.len() && len > 0 {
-                Some(&tiff_data[start..end])
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    let stride = out_w * 4;
+    let mut pixels = vec![0u8; (stride * out_h) as usize];
+    unsafe { converter.CopyPixels(std::ptr::null(), stride, &mut pixels) }
+        .map_err(|e| anyhow::anyhow!("WIC pixels: {}", e))?;
+    for ch in pixels.chunks_exact_mut(4) { ch.swap(0, 2); }
+    let rgba = image::RgbaImage::from_raw(out_w, out_h, pixels)
+        .ok_or_else(|| anyhow::anyhow!("WIC bad dim {}x{}", out_w, out_h))?;
+    let img = DynamicImage::ImageRgba8(rgba);
+    let scaled_rgb = img.to_rgb8();
+    let mut buf = Vec::new();
+    let mut cur = Cursor::new(&mut buf);
+    let mut enc = JpegEncoder::new_with_quality(&mut cur, q);
+    enc.encode(&scaled_rgb, scaled_rgb.width(), scaled_rgb.height(), image::ExtendedColorType::Rgb8)?;
+    Ok(buf)
 }
 
-// 读取 IFD 中的 next IFD offset（在 N 个 entry 之后的 4 字节）
-fn read_ifd_next(data: &[u8], ifd_base: usize, le: bool) -> usize {
-    if ifd_base + 2 > data.len() {
-        return 0;
-    }
-    let n = read_u16(data, ifd_base, le) as usize;
-    let next_off = ifd_base + 2 + n * 12;
-    if next_off + 4 > data.len() {
-        return 0;
-    }
-    read_u32(data, next_off, le) as usize
+#[cfg(not(target_os = "windows"))]
+fn try_wic_api_thumbnail(_: &Path, _: u32, _: u8) -> anyhow::Result<Vec<u8>> {
+    Err(anyhow::anyhow!("WIC not available"))
 }
 
-#[inline]
-fn read_u16(data: &[u8], offset: usize, le: bool) -> u16 {
-    let b = &data[offset..offset + 2];
-    if le {
-        u16::from_le_bytes([b[0], b[1]])
-    } else {
-        u16::from_be_bytes([b[0], b[1]])
+// ===================== Utilities =====================
+
+fn decode_resize_encode(j: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    if j.is_empty() { return Err(anyhow::anyhow!("empty")); }
+    let img = image::load_from_memory(j)?;
+    let le = img.width().max(img.height());
+    if le < tl/4 { return Err(anyhow::anyhow!("too small ({}px)", le)); }
+    let f = if le>tl || le<tl/2 { img.resize(tl, u32::MAX, FilterType::Triangle) } else { img };
+    let mut buf = Vec::new();
+    let mut cur = Cursor::new(&mut buf);
+    let mut enc = JpegEncoder::new_with_quality(&mut cur, q);
+    enc.encode(f.as_bytes(), f.width(), f.height(), f.color().into())?;
+    Ok(buf)
+}
+
+fn is_tiff_magic(m: &[u8]) -> bool {
+    m.len()>=2 && (&m[0..2]==b"II" || &m[0..2]==b"MM") ||
+    m.len()>=4 && (&m[0..4]==b"IIU\0" || &m[0..4]==b"IIRO" || &m[0..4]==b"IIRS")
+}
+
+fn parse_tiff_thumbnail(td: &[u8]) -> Option<&[u8]> {
+    if td.len()<8 { return None; }
+    let le = match &td[0..2] { b"II"=>true, b"MM"=>false, _=>return None };
+    let i0 = read_u32(td,4,le) as usize;
+    if i0==0 || i0+2>td.len() { return None; }
+    let i1 = { let n=read_u16(td,i0,le) as usize; let nx=i0+2+n*12; if nx+4>td.len(){0}else{read_u32(td,nx,le) as usize} };
+    if i1==0 || i1+2>td.len() { return None; }
+    let n = read_u16(td,i1,le) as usize;
+    let (mut off, mut len) = (None::<u32>, None::<u32>);
+    for i in 0..n { let b=i1+2+i*12; if b+12>td.len() { break; }
+        let t=read_u16(td,b,le); let c=read_u32(td,b+4,le); let v=read_u32(td,b+8,le);
+        if t==0x0201 && c>0 { off=Some(v); } if t==0x0202 && c>0 { len=Some(v); }
     }
+    match (off,len) { (Some(o),Some(l)) if l>0 => {
+        let s=o as usize; if s+l as usize<=td.len() { Some(&td[s..s+l as usize]) } else { None }
+    } _=>None }
 }
+#[inline] fn read_u16(d:&[u8],o:usize,le:bool)->u16 { if le { u16::from_le_bytes([d[o],d[o+1]]) } else { u16::from_be_bytes([d[o],d[o+1]]) } }
+#[inline] fn read_u32(d:&[u8],o:usize,le:bool)->u32 { if le { u32::from_le_bytes([d[o],d[o+1],d[o+2],d[o+3]]) } else { u32::from_be_bytes([d[o],d[o+1],d[o+2],d[o+3]]) } }
 
-#[inline]
-fn read_u32(data: &[u8], offset: usize, le: bool) -> u32 {
-    let b = &data[offset..offset + 4];
-    if le {
-        u32::from_le_bytes([b[0], b[1], b[2], b[3]])
-    } else {
-        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
-    }
-}
+// ===================== Cache =====================
 
-// ===========================
-//  Orientation 处理
-// ===========================
-
-/// 从 JPEG 文件中读取 EXIF Orientation tag（1-8）
-///
-/// Orientation 值含义：
-///   1 = 正常、2 = 水平翻转、3 = 旋转 180、4 = 垂直翻转
-///   5 = 顺时针90 + 水平翻转、6 = 顺时针90
-///   7 = 逆时针90 + 水平翻转、8 = 逆时针90
-fn read_orientation(source: &Path) -> Option<u32> {
-    use exif::{Reader, Tag};
-    use std::fs::File;
-    use std::io::BufReader;
-
-    let file = File::open(source).ok()?;
-    let exif = Reader::new()
-        .read_from_container(&mut BufReader::new(file))
-        .ok()?;
-
-    exif.get_field(Tag::Orientation, exif::In::PRIMARY)
-        .and_then(|f| f.value.get_uint(0))
-}
-
-/// 根据 EXIF Orientation 旋转/翻转图像
-fn apply_orientation(img: DynamicImage, orientation: u32) -> DynamicImage {
-    match orientation {
-        2 => img.fliph(),
-        3 => img.rotate180(),
-        4 => img.flipv(),
-        5 => img.rotate90().fliph(),
-        6 => img.rotate90(),
-        7 => img.rotate270().fliph(),
-        8 => img.rotate270(),
-        _ => img, // 1 或未知 — 不处理
-    }
-}
-
-// ===========================
-//  缓存（版本化 key）
-// ===========================
-
-/// 获取缩略图磁盘缓存路径（版本化 key）
-///
-/// 缓存位于 %LOCALAPPDATA%/photolib/thumbs/ ，
-/// 文件名格式：v3_{xxhash64}.jpg
-///
-/// 版本号变更意味着旧缓存自动失效，无需手动删除。
-/// v1 → no orientation / slow path only（已废弃）
-/// v2 → 跳过（避免冲突）
-/// v3 → EXIF 内嵌缩略图 + Orientation 校正
 pub fn get_cache_path(file_path: &str) -> PathBuf {
-    let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("photolib")
-        .join("thumbs");
+    let dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("photolib").join("thumbs");
+    fs::create_dir_all(&dir).ok();
+    dir.join(format!("v6_{:016x}.jpg", xxhash_rust::xxh3::xxh3_64(file_path.as_bytes())))
+}
+pub fn get_thumbnail_cache_path(source: &Path) -> PathBuf { get_cache_path(&source.to_string_lossy()) }
 
-    fs::create_dir_all(&cache_dir).ok();
-
-    let hash = xxhash_rust::xxh3::xxh3_64(file_path.as_bytes());
-    cache_dir.join(format!("v3_{:016x}.jpg", hash))
+/// 检查缓存是否对源文件有效：单次扫描，零额外 syscall 浪费
+pub fn cache_is_valid(source: &Path, cache: &Path) -> bool {
+    let (Ok(sm), Ok(cm)) = (fs::metadata(source), fs::metadata(cache)) else {
+        return false;
+    };
+    let (Ok(st), Ok(ct)) = (sm.modified(), cm.modified()) else {
+        return false;
+    };
+    ct >= st
 }
 
-// ===========================
-//  兼容旧接口
-// ===========================
-
-/// 获取缩略图缓存路径
-pub fn get_thumbnail_cache_path(source: &Path) -> PathBuf {
-    get_cache_path(&source.to_string_lossy())
-}
-
-/// 生成缩略图并写入缓存
 pub fn generate_and_cache(source: &Path, level: ThumbLevel) -> anyhow::Result<PathBuf> {
-    let cache_path = get_cache_path(&source.to_string_lossy());
-
-    if cache_path.exists() {
-        if let (Ok(src_meta), Ok(cache_meta)) = (fs::metadata(source), fs::metadata(&cache_path)) {
-            if let (Ok(src_time), Ok(cache_time)) = (src_meta.modified(), cache_meta.modified()) {
-                if cache_time >= src_time {
-                    return Ok(cache_path);
-                }
-            }
-        }
-    }
-
-    let thumb_data = generate_thumbnail(source, level)?;
-    fs::write(&cache_path, &thumb_data)?;
-
-    Ok(cache_path)
+    let cp = get_cache_path(&source.to_string_lossy());
+    if cache_is_valid(source, &cp) { return Ok(cp); }
+    fs::write(&cp, generate_thumbnail(source, level)?)?;
+    Ok(cp)
 }

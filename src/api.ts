@@ -159,9 +159,16 @@ export async function removeAlbum(folderId: number): Promise<void> {
 export { isTauri };
 
 /// 获取照片缩略图（高性能：优先 EXIF 内嵌缩略图 + 磁盘缓存）
+/// @deprecated 请使用 getThumbnailPath + convertFileSrc 替代
 export async function getThumbnailData(filePath: string): Promise<string> {
   const invoke = await getInvoke();
   return invoke<string>("get_thumbnail", { filePath });
+}
+
+/// 获取照片缩略图磁盘缓存路径，配合 convertFileSrc 直接给 <img src> 用
+export async function getThumbnailPath(filePath: string): Promise<string> {
+  const invoke = await getInvoke();
+  return invoke<string>("get_thumbnail_path", { filePath });
 }
 
 /// 批量提取 EXIF（后台调用，不阻塞 UI）

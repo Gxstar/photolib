@@ -57,6 +57,8 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
             notes           TEXT,
             paired_raw_id   INTEGER,
 
+            exif_attempted  INTEGER DEFAULT 0,
+
             created_at      TEXT DEFAULT (datetime('now')),
             updated_at      TEXT DEFAULT (datetime('now'))
         );
@@ -71,6 +73,10 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_flag         ON photos(flag);
         CREATE INDEX IF NOT EXISTS idx_lat_lon      ON photos(latitude, longitude);
         CREATE INDEX IF NOT EXISTS idx_file_hash    ON photos(file_hash);
+        CREATE INDEX IF NOT EXISTS idx_file_path    ON photos(file_path);
+        CREATE INDEX IF NOT EXISTS idx_media_type   ON photos(media_type);
+        CREATE INDEX IF NOT EXISTS idx_file_date    ON photos(file_date);
+        CREATE INDEX IF NOT EXISTS idx_exif_attempted ON photos(exif_attempted);
 
         CREATE TABLE IF NOT EXISTS folders (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,6 +113,9 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
         );
         "
     )?;
+
+    // 迁移：为已存在的 DB 添加 exif_attempted 列（SQLite 不报错就成功）
+    conn.execute_batch("ALTER TABLE photos ADD COLUMN exif_attempted INTEGER DEFAULT 0;").ok();
 
     Ok(())
 }

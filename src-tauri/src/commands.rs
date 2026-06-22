@@ -2,7 +2,7 @@
 
 use crate::models::Photo;
 use crate::scanner;
-use tauri::State;
+use tauri::{State, Emitter};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -359,7 +359,10 @@ pub async fn get_photos_by_folder(
     eprintln!("[PhotoLib::get_photos_by_folder] Querying for: {:?}", folder_path);
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
 
-    // 查询全部照片，在 Rust 层按 parent 目录过滤（避免 SQL LIKE 转义问题）
+    // SQL LIKE 前缀匹配走 idx_file_path 索引（替代「SELECT * 全表扫描」）
+    let folder_norm = folder_path.trim_end_matches('\\');
+    let prefix = format!("{}\\", folder_norm);
+
     let mut stmt = conn
         .prepare("SELECT id, file_path, file_name, file_size, file_hash, file_date, media_type,
                          date_taken, camera_make, camera_model, lens_model,
@@ -368,11 +371,13 @@ pub async fn get_photos_by_folder(
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
                          rating, color_label, flag, notes
-                  FROM photos ORDER BY date_taken DESC")
+                  FROM photos
+                  WHERE file_path LIKE ?1
+                  ORDER BY date_taken DESC")
         .map_err(|e| e.to_string())?;
 
-    let all_photos: Vec<Photo> = stmt
-        .query_map([], |row| {
+    let candidates: Vec<Photo> = stmt
+        .query_map(rusqlite::params![format!("{}%", prefix)], |row| {
             Ok(Photo {
                 id: row.get(0)?,
                 file_path: row.get(1)?,
@@ -410,20 +415,20 @@ pub async fn get_photos_by_folder(
         .filter_map(|r| r.ok())
         .collect();
 
-    eprintln!("[PhotoLib::get_photos_by_folder] Total photos in DB: {}", all_photos.len());
+    eprintln!("[PhotoLib::get_photos_by_folder] {} candidates with prefix", candidates.len());
 
-    // 过滤：只保留直接父目录匹配的
-    let folder = std::path::Path::new(&folder_path);
-    let photos: Vec<Photo> = all_photos.into_iter()
+    // 过滤：只保留直接父目录匹配，排除子目录
+    let folder = std::path::PathBuf::from(folder_norm);
+    let photos: Vec<Photo> = candidates.into_iter()
         .filter(|p| {
             std::path::Path::new(&p.file_path)
                 .parent()
-                .map(|parent| parent == folder)
+                .map(|parent| parent == folder.as_path())
                 .unwrap_or(false)
         })
         .collect();
 
-    eprintln!("[PhotoLib::get_photos_by_folder] After parent filter: {} photos", photos.len());
+    eprintln!("[PhotoLib::get_photos_by_folder] {} photos (direct children only)", photos.len());
     Ok(photos)
 }
 
@@ -434,7 +439,10 @@ pub async fn get_photos_by_folder_deep(
     db: State<'_, crate::db::AppDatabase>,
 ) -> Result<Vec<Photo>, String> {
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
-    // 查询全部照片，在 Rust 层按前缀过滤（避免 SQL LIKE 转义问题）
+    let folder_norm = folder_path.trim_end_matches('\\');
+    let prefix = format!("{}\\", folder_norm);
+
+    // 直接 SQL LIKE 前缀匹配走 idx_file_path 索引
     let mut stmt = conn
         .prepare("SELECT id, file_path, file_name, file_size, file_hash, file_date, media_type,
                          date_taken, camera_make, camera_model, lens_model,
@@ -443,10 +451,12 @@ pub async fn get_photos_by_folder_deep(
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
                          rating, color_label, flag, notes
-                  FROM photos ORDER BY date_taken DESC")
+                  FROM photos
+                  WHERE file_path LIKE ?1
+                  ORDER BY date_taken DESC")
         .map_err(|e| e.to_string())?;
-    let all_photos: Vec<Photo> = stmt
-        .query_map([], |row| {
+    let photos: Vec<Photo> = stmt
+        .query_map(rusqlite::params![format!("{}%", prefix)], |row| {
             Ok(Photo {
                 id: row.get(0)?,
                 file_path: row.get(1)?,
@@ -482,15 +492,6 @@ pub async fn get_photos_by_folder_deep(
         })
         .map_err(|e| e.to_string())?
         .filter_map(|r| r.ok())
-        .collect();
-    // 过滤：文件路径以 folder_path 开头（递归包含子目录）
-    let prefix = if folder_path.ends_with('\\') {
-        folder_path.clone()
-    } else {
-        format!("{}\\", folder_path)
-    };
-    let photos: Vec<Photo> = all_photos.into_iter()
-        .filter(|p| p.file_path.starts_with(&prefix))
         .collect();
     Ok(photos)
 }
@@ -580,26 +581,29 @@ pub async fn debug_list_photos(
     Ok(format!("DB has {} photos. First {} paths: {:?}", count, paths.len(), paths))
 }
 
-/// 打开目录 — 极速返回
+/// 打开目录 — 极速返回，后台异步完成 DB 写入 + EXIF 提取
 ///
 /// Priority 1 规格：扫描即返回（跳过 DB），<50ms 前端拿到文件列表
-/// DB 写入在后台异步完成
+/// 后台线程：INSERT → COMMIT → 逐文件 EXIF 提取 → 事件推送（免竞态）
 #[tauri::command]
 pub async fn open_directory(
     folder_path: String,
     db: State<'_, crate::db::AppDatabase>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<Photo>, String> {
     eprintln!("[PhotoLib::open_directory] Opening: {:?}", folder_path);
-    let path = std::path::Path::new(&folder_path);
+    let path = std::path::PathBuf::from(&folder_path);
     if !path.exists() || !path.is_dir() {
         return Err(format!("目录不存在: {}", folder_path));
     }
 
-    // ===== Phase 1: 极速扫描文件元数据（不解码像素） =====
-    let entries = crate::scanner::scan_directory_shallow_with_meta(path);
+    // ===== Phase 1: 极速扫描文件元数据 =====
+    let entries = tokio::task::spawn_blocking(move || {
+        crate::scanner::scan_directory_shallow_with_meta(&path)
+    }).await.map_err(|e| format!("scan join error: {}", e))?;
     eprintln!("[PhotoLib::open_directory] Scanned {} files", entries.len());
 
-    // 从扫描结果直接构建 Photo 数组（hash 作为 ID，EXIF 字段空）
+    // 构建 Photo 数组（hash 为 ID，EXIF 字段空）
     let photos: Vec<Photo> = entries.iter().map(|e| {
         let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
         Photo {
@@ -624,10 +628,12 @@ pub async fn open_directory(
     }).collect();
     eprintln!("[PhotoLib::open_directory] Returning {} photos (instant)", photos.len());
 
-    // ===== Phase 3 (background): DB 写入 + EXIF 提取 =====
+    // ===== Phase 3 (background): INSERT + EXIF 一体化 =====
     let db_path = db.path.clone();
     let dir_path = folder_path.clone();
+    let app_handle = app.clone();
     tokio::spawn(async move {
+        // — Step A: INSERT file records（SQLite 操作本来就是同步阻塞的） —
         if let Ok(conn) = Connection::open(&db_path) {
             conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
             conn.execute_batch("BEGIN TRANSACTION;").ok();
@@ -639,8 +645,84 @@ pub async fn open_directory(
                 ).ok();
             }
             conn.execute_batch("COMMIT;").ok();
+            eprintln!("[PhotoLib::open_directory] DB INSERT: {} files → {:?}", entries.len(), dir_path);
         }
-        eprintln!("[PhotoLib::open_directory] Background DB write done for {:?}", dir_path);
+
+        // — Step B: EXIF extraction + event push —
+        // 包进 spawn_blocking 释放 tokio worker 线程，让缩略图 IPC 不排队
+        let db_path2 = db_path.clone();
+        let app_handle2 = app_handle.clone();
+        let dir_path2 = dir_path.clone();
+        let entries2 = entries.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = Connection::open(&db_path2) {
+                conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
+                let mut batch: Vec<serde_json::Value> = Vec::with_capacity(100);
+                for e in &entries2 {
+                    let fp = std::path::Path::new(&e.path);
+                    match crate::metadata::extract_exif(fp) {
+                        Ok(exif) => {
+                            conn.execute(
+                                "UPDATE photos SET
+                                    date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
+                                    focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
+                                    exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
+                                    image_width=?13, image_height=?14, color_space=?15,
+                                    latitude=?16, longitude=?17, altitude=?18,
+                                    exif_attempted=1
+                                 WHERE file_path=?19",
+                                rusqlite::params![
+                                    exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
+                                    exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
+                                    exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
+                                    exif.image_width, exif.image_height, exif.color_space,
+                                    exif.latitude, exif.longitude, exif.altitude,
+                                    e.path,
+                                ],
+                            ).ok();
+
+                            let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
+                            batch.push(serde_json::json!({
+                                "id": id, "filePath": e.path,
+                                "dateTaken": exif.date_taken,
+                                "cameraMake": exif.camera_make,
+                                "cameraModel": exif.camera_model,
+                                "lensModel": exif.lens_model,
+                                "focalLength": exif.focal_length,
+                                "aperture": exif.aperture,
+                                "shutterSpeed": exif.shutter_speed,
+                                "iso": exif.iso,
+                                "exposureComp": exif.exposure_comp,
+                                "flash": exif.flash,
+                                "whiteBalance": exif.white_balance,
+                                "meteringMode": exif.metering_mode,
+                                "imageWidth": exif.image_width,
+                                "imageHeight": exif.image_height,
+                                "colorSpace": exif.color_space,
+                                "latitude": exif.latitude,
+                                "longitude": exif.longitude,
+                                "altitude": exif.altitude,
+                            }));
+                            if batch.len() >= 100 {
+                                let _ = app_handle2.emit("exif-updated", &batch);
+                                batch.clear();
+                            }
+                        }
+                        Err(err) => {
+                            conn.execute(
+                                "UPDATE photos SET exif_attempted=1 WHERE file_path=?1",
+                                rusqlite::params![e.path],
+                            ).ok();
+                            eprintln!("[PhotoLib::open_directory] EXIF skip {}: {:#}", e.path, err);
+                        }
+                    }
+                }
+                if !batch.is_empty() {
+                    let _ = app_handle2.emit("exif-updated", &batch);
+                }
+                eprintln!("[PhotoLib::open_directory] EXIF done: {} files processed for {:?}", entries2.len(), dir_path2);
+            }
+        }).await.unwrap_or_default();
     });
 
     Ok(photos)
@@ -654,7 +736,9 @@ pub async fn reload_directory(
     db: State<'_, crate::db::AppDatabase>,
 ) -> Result<Vec<Photo>, String> {
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
-    let glob_pattern = format!("{}\\*", folder_path.trim_end_matches('\\'));
+
+    let folder_norm = folder_path.trim_end_matches('\\');
+    let prefix = format!("{}\\", folder_norm);
 
     let mut stmt = conn
         .prepare("SELECT id, file_path, file_name, file_size, file_hash, file_date, media_type,
@@ -664,11 +748,13 @@ pub async fn reload_directory(
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
                          rating, color_label, flag, notes
-                  FROM photos WHERE file_path GLOB ?1")
+                  FROM photos
+                  WHERE file_path LIKE ?1
+                  ORDER BY date_taken DESC")
         .map_err(|e| e.to_string())?;
 
-    let photos: Vec<Photo> = stmt
-        .query_map([&glob_pattern], |row| {
+    let candidates: Vec<Photo> = stmt
+        .query_map(rusqlite::params![format!("{}%", prefix)], |row| {
             Ok(Photo {
                 id: row.get(0)?,
                 file_path: row.get(1)?,
@@ -706,172 +792,233 @@ pub async fn reload_directory(
         .filter_map(|r| r.ok())
         .collect();
 
-    eprintln!("[PhotoLib::reload_directory] {} photos from DB", photos.len());
+    // 过滤：只保留直接父目录匹配的照片（不包含子目录）
+    let folder = std::path::PathBuf::from(folder_norm);
+    let photos: Vec<Photo> = candidates.into_iter()
+        .filter(|p| {
+            std::path::Path::new(&p.file_path)
+                .parent()
+                .map(|parent| parent == folder.as_path())
+                .unwrap_or(false)
+        })
+        .collect();
+
+    eprintln!("[PhotoLib::reload_directory] {} photos from DB (shallow)", photos.len());
     Ok(photos)
 }
 
-/// 批量提取指定目录内照片的 EXIF（纯 Rust，不启动外部进程）
-/// 使用 kamadak-exif 原生库解析，极低系统资源消耗
+/// 提取目录照片的 EXIF（手动重处理，直接扫描文件系统）
+///
+/// 用途：手动修复已存在目录中缺失的 EXIF（如首次打开时竞态导致未处理）
+/// 行为：扫描文件系统 → INSERT OR IGNORE 确保记录 → 跳过 exif_attempted=1 → 提取 + event
+/// 不再依赖 DB 中是否有记录（消除和 open_directory 后台 INSERT 的竞态）
 #[tauri::command]
 pub async fn extract_exif_batch(
     folder_path: String,
     db: State<'_, crate::db::AppDatabase>,
+    app: tauri::AppHandle,
 ) -> Result<usize, String> {
     use std::path::Path;
     eprintln!("[PhotoLib::extract_exif_batch] Start: {:?}", folder_path);
 
+    let dir = Path::new(&folder_path);
+    if !dir.exists() || !dir.is_dir() {
+        return Err("目录不存在".to_string());
+    }
+
+    // 直接扫描文件系统（不依赖 DB）
+    let files = crate::scanner::scan_directory_shallow(dir);
+    eprintln!("[PhotoLib::extract_exif_batch] Found {} files on disk", files.len());
+
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
     conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
 
-    let all_files: Vec<String> = conn
-        .prepare("SELECT file_path FROM photos WHERE date_taken IS NULL")
-        .map_err(|e| e.to_string())?
-        .query_map([], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    let folder_prefix = if folder_path.ends_with('\\') {
-        folder_path.clone()
-    } else {
-        format!("{}\\", folder_path)
-    };
-    let files: Vec<String> = all_files
-        .into_iter()
-        .filter(|p| p.starts_with(&folder_prefix))
-        .collect();
-
-    if files.is_empty() {
-        eprintln!("[PhotoLib::extract_exif_batch] All photos already have EXIF");
-        return Ok(0);
+    // 确保所有文件在 DB 中有行
+    conn.execute_batch("BEGIN TRANSACTION;").ok();
+    for f in &files {
+        let fp = Path::new(f);
+        let name = fp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let media = crate::scanner::get_media_type(fp);
+        let size = std::fs::metadata(fp).ok().map(|m| m.len() as i64);
+        conn.execute(
+            "INSERT OR IGNORE INTO photos (file_path, file_name, file_size, media_type)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![f, name, size, media],
+        ).ok();
     }
+    conn.execute_batch("COMMIT;").ok();
 
-    eprintln!("[PhotoLib::extract_exif_batch] Need EXIF for {} photos (native parser)", files.len());
+    // 提取 EXIF（跳过 exif_attempted=1）
     let mut updated = 0usize;
+    let mut skipped = 0usize;
+    let mut batch: Vec<serde_json::Value> = Vec::with_capacity(100);
 
-    for file in &files {
-        let fp = Path::new(file);
-        if let Ok(exif) = crate::metadata::extract_exif(fp) {
-            conn.execute(
-                "UPDATE photos SET
-                    date_taken = ?1, camera_make = ?2, camera_model = ?3, lens_model = ?4,
-                    focal_length = ?5, aperture = ?6, shutter_speed = ?7, iso = ?8,
-                    exposure_comp = ?9, flash = ?10, white_balance = ?11, metering_mode = ?12,
-                    image_width = ?13, image_height = ?14, color_space = ?15,
-                    latitude = ?16, longitude = ?17, altitude = ?18
-                WHERE file_path = ?19",
-                rusqlite::params![
-                    exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
-                    exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
-                    exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
-                    exif.image_width, exif.image_height, exif.color_space,
-                    exif.latitude, exif.longitude, exif.altitude,
-                    file,
-                ],
-            ).ok();
-            updated += 1;
+    for f in &files {
+        // 跳过已尝试过的文件
+        let attempted: Option<i32> = conn
+            .query_row(
+                "SELECT exif_attempted FROM photos WHERE file_path=?1",
+                rusqlite::params![f],
+                |row| row.get(0),
+            )
+            .ok();
+        if attempted == Some(1) {
+            skipped += 1;
+            continue;
+        }
+
+        let fp = Path::new(f);
+        match crate::metadata::extract_exif(fp) {
+            Ok(exif) => {
+                conn.execute(
+                    "UPDATE photos SET
+                        date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
+                        focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
+                        exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
+                        image_width=?13, image_height=?14, color_space=?15,
+                        latitude=?16, longitude=?17, altitude=?18,
+                        exif_attempted=1
+                     WHERE file_path=?19",
+                    rusqlite::params![
+                        exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
+                        exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
+                        exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
+                        exif.image_width, exif.image_height, exif.color_space,
+                        exif.latitude, exif.longitude, exif.altitude,
+                        f,
+                    ],
+                ).ok();
+                updated += 1;
+
+                let id = xxhash_rust::xxh3::xxh3_64(f.as_bytes()) as i64;
+                batch.push(serde_json::json!({
+                    "id": id, "filePath": f,
+                    "dateTaken": exif.date_taken,
+                    "cameraMake": exif.camera_make,
+                    "cameraModel": exif.camera_model,
+                    "lensModel": exif.lens_model,
+                    "focalLength": exif.focal_length,
+                    "aperture": exif.aperture,
+                    "shutterSpeed": exif.shutter_speed,
+                    "iso": exif.iso,
+                    "exposureComp": exif.exposure_comp,
+                    "flash": exif.flash,
+                    "whiteBalance": exif.white_balance,
+                    "meteringMode": exif.metering_mode,
+                    "imageWidth": exif.image_width,
+                    "imageHeight": exif.image_height,
+                    "colorSpace": exif.color_space,
+                    "latitude": exif.latitude,
+                    "longitude": exif.longitude,
+                    "altitude": exif.altitude,
+                }));
+                if batch.len() >= 100 {
+                    let _ = app.emit("exif-updated", &batch);
+                    batch.clear();
+                }
+            }
+            Err(err) => {
+                conn.execute(
+                    "UPDATE photos SET exif_attempted=1 WHERE file_path=?1",
+                    rusqlite::params![f],
+                ).ok();
+                eprintln!("[PhotoLib::extract_exif_batch] FAIL {}: {:#}", f, err);
+            }
         }
     }
+    if !batch.is_empty() {
+        let _ = app.emit("exif-updated", &batch);
+    }
 
-    eprintln!("[PhotoLib::extract_exif_batch] Updated {} photos", updated);
+    eprintln!("[PhotoLib::extract_exif_batch] Done: {} updated, {} skipped / {} total",
+              updated, skipped, files.len());
     Ok(updated)
 }
 
-/// 获取照片缩略图 data URL
+/// 获取照片缩略图磁盘缓存路径（用于前端 convertFileSrc 加载）
 ///
-/// 确保缓存存在，读取后 base64 编码返回 `data:image/jpeg;base64,...`。
-/// 虚拟列表 + 2 并发限流确保同时只有 ~20 个 data URL 在内存。
+/// 通过 asset:// 协议让 WebView 直接读取磁盘缓存，
+/// 省去 base64 编解码和 IPC 字符串传输开销。
+/// 阻塞 I/O（文件读取 + 解码 + JPEG 编码）全部包进 spawn_blocking，
+/// 不占用 tokio worker，确保缩略图 IPC 不阻塞其他命令。
+#[tauri::command]
+pub async fn get_thumbnail_path(
+    file_path: String,
+) -> Result<String, String> {
+    let path = std::path::PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err("文件不存在".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        crate::thumbnail::generate_and_cache(&path, crate::thumbnail::ThumbLevel::L1)
+            .map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| {
+                eprintln!("[PhotoLib::get_thumbnail_path] FAILED for {:?}: {:#}", path, e);
+                format!("缩略图生成失败: {}", e)
+            })
+    }).await.map_err(|e| format!("join error: {}", e))?
+}
+
+/// 兼容旧接口：返回 base64 data URL（已弃用，保留以备不时之需）
 #[tauri::command]
 pub async fn get_thumbnail(
     file_path: String,
 ) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
-    use std::path::Path;
 
-    let path = Path::new(&file_path);
+    let path = std::path::PathBuf::from(&file_path);
     if !path.exists() {
         return Err("文件不存在".to_string());
     }
 
-    let cache_path = crate::thumbnail::get_cache_path(&file_path);
-
-    // 缓存有效 → 读文件 base64 编码
-    let use_cache = cache_path.exists()
-        && (|| {
-            let (Ok(sm), Ok(cm)) = (std::fs::metadata(path), std::fs::metadata(&cache_path)) else { return false };
-            let (Ok(st), Ok(ct)) = (sm.modified(), cm.modified()) else { return false };
-            ct >= st
-        })();
-
-    if !use_cache {
-        let thumb_data = crate::thumbnail::generate_thumbnail(path, crate::thumbnail::ThumbLevel::L1)
-            .map_err(|e| format!("缩略图生成失败: {}", e))?;
-        std::fs::write(&cache_path, &thumb_data).ok();
-    }
-
-    let data = std::fs::read(&cache_path).map_err(|e| format!("读取缓存失败: {}", e))?;
-    let b64 = STANDARD.encode(&data);
-    Ok(format!("data:image/jpeg;base64,{}", b64))
+    tokio::task::spawn_blocking(move || {
+        let cache_path = match crate::thumbnail::generate_and_cache(&path, crate::thumbnail::ThumbLevel::L1) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[PhotoLib::get_thumbnail] FAILED for {:?}: {:#}", path, e);
+                return Err(format!("缩略图生成失败: {}", e));
+            }
+        };
+        let data = std::fs::read(&cache_path).map_err(|e| format!("读取缓存失败: {}", e))?;
+        let b64 = STANDARD.encode(&data);
+        Ok(format!("data:image/jpeg;base64,{}", b64))
+    }).await.map_err(|e| format!("join error: {}", e))?
 }
 
-/// 预生成前 N 张缩略图到磁盘缓存（单线程，低调运行）
-///
-/// 设计思路（对标 XnView MP）：
-///   - 只预热前 50 张（约 2 屏），后续由前端 IntersectionObserver 懒加载覆盖
-///   - 单线程串行，不抢前端 visible 区域的 get_thumbnail 资源
-///   - 延迟触发：前端先渲染网格，500ms 后再调用此命令，避免竞争
-///
-/// 配合 EXIF 内嵌缩略图优化后，预热 50 张只需 ~250ms（5ms × 50），
-/// 对 CPU 和磁盘 I/O 影响极低。
+/// 预生成前 N 张缩略图到磁盘缓存（阻塞 I/O 外移 spawn_blocking）
 #[tauri::command]
 pub async fn preload_thumbnails(folder_path: String) -> Result<usize, String> {
-    use std::path::Path;
-
-    let path = Path::new(&folder_path);
+    let path = std::path::PathBuf::from(&folder_path);
     if !path.exists() || !path.is_dir() {
         return Ok(0);
     }
 
-    let files = crate::scanner::scan_directory_shallow(path);
-    if files.is_empty() {
-        return Ok(0);
-    }
+    tokio::task::spawn_blocking(move || {
+        let files = crate::scanner::scan_directory_shallow(&path);
+        if files.is_empty() {
+            return Ok(0usize);
+        }
 
-    const PRELOAD_LIMIT: usize = 50;
+        const PRELOAD_LIMIT: usize = 50;
+        let mut cached = 0usize;
 
-    let to_preload: Vec<&String> = files.iter().take(PRELOAD_LIMIT).collect();
-    let mut cached = 0usize;
-
-    for file in &to_preload {
-        let fp = Path::new(file);
-        let cache_path = crate::thumbnail::get_cache_path(file);
-
-        // 已有有效缓存则跳过
-        if cache_path.exists() {
-            if let (Ok(sm), Ok(cm)) = (std::fs::metadata(fp), std::fs::metadata(&cache_path)) {
-                if let (Ok(st), Ok(ct)) = (sm.modified(), cm.modified()) {
-                    if ct >= st {
-                        cached += 1;
-                        continue;
-                    }
+        for file in files.iter().take(PRELOAD_LIMIT) {
+            let fp = std::path::Path::new(file);
+            if let Ok(data) = crate::thumbnail::generate_thumbnail(fp, crate::thumbnail::ThumbLevel::L1) {
+                if !data.is_empty() {
+                    let cache_path = crate::thumbnail::get_cache_path(file);
+                    std::fs::write(&cache_path, &data).ok();
+                    cached += 1;
                 }
             }
         }
 
-        let data = crate::thumbnail::generate_thumbnail(fp, crate::thumbnail::ThumbLevel::L1);
-        if let Ok(d) = data {
-            if !d.is_empty() {
-                std::fs::write(&cache_path, &d).ok();
-                cached += 1;
-            }
-        }
-    }
-
-    let total = to_preload.len();
-    eprintln!(
-        "[PhotoLib::preload_thumbnails] Cached {}/{} thumbs in {:?} (limit={PRELOAD_LIMIT})",
-        cached, total, folder_path
-    );
-    Ok(cached)
+        eprintln!(
+            "[PhotoLib::preload_thumbnails] Cached {}/{} thumbs in {:?} (limit={PRELOAD_LIMIT})",
+            cached, files.len().min(PRELOAD_LIMIT), folder_path
+        );
+        Ok(cached)
+    }).await.map_err(|e| format!("join error: {}", e))?
 }
 
