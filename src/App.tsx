@@ -20,7 +20,6 @@ export default function App() {
     setTheme,
   } = useAppStore();
 
-  // Initialize theme class on mount
   useEffect(() => {
     if (theme === "dark") {
       document.documentElement.classList.add("dark");
@@ -29,7 +28,6 @@ export default function App() {
     }
   }, [theme]);
 
-  // Apply filters & sort — useMemo 避免 EXIF event 到达时多次重算
   const filteredPhotos = useMemo(() => {
     return photos
       .filter((p) => {
@@ -48,7 +46,6 @@ export default function App() {
         const key = sortBy as keyof typeof a;
         const va = a[key];
         const vb = b[key];
-        // null/空值统一排到最后，避免 EXIF 异步到达时列表反复跳跃
         if (va == null || (typeof va === "string" && va === "")) {
           return va == null ? 1 : (vb == null || (typeof vb === "string" && vb === "") ? 0 : 1);
         }
@@ -64,32 +61,28 @@ export default function App() {
   }, [photos, filter, sortBy, sortOrder]);
 
   return (
-    <div className="h-full flex flex-col bg-surface-0 dark:bg-surface-0 text-surface-900 dark:text-surface-100">
-      {/* Toolbar */}
+    <div className="h-full flex flex-col bg-surface-0 dark:bg-surface-0 text-surface-900 dark:text-surface-100 relative">
       <Toolbar />
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left panel */}
+      <div className="flex-1 flex overflow-hidden relative z-[1]">
         {leftPanelOpen && (
-          <div className="w-60 shrink-0 border-r border-surface-200 dark:border-surface-200 overflow-hidden bg-surface-50 dark:bg-surface-50">
+          <div className="w-64 shrink-0 overflow-hidden bg-surface-50/80 dark:bg-surface-50/80 backdrop-blur-sm border-r border-surface-200/60 dark:border-surface-200/30">
             <LeftPanel />
           </div>
         )}
 
-        {/* Center: thumbnail grid */}
-        <div className="flex-1 overflow-hidden bg-surface-0 dark:bg-surface-0">
+        <div className="flex-1 overflow-hidden bg-transparent relative">
           {error ? (
             <div className="flex flex-col items-center justify-center h-full gap-4 animate-fade-in">
-              <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
-                <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
+                <svg className="w-7 h-7 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
               <div className="text-red-500 text-sm font-medium">{error}</div>
               <button
                 onClick={() => window.location.reload()}
-                className="px-4 py-2 bg-surface-100 dark:bg-surface-100 hover:bg-surface-200 dark:hover:bg-surface-200 text-surface-700 dark:text-surface-300 text-xs rounded-lg transition-colors font-medium"
+                className="px-5 py-2 bg-white/70 dark:bg-surface-100/70 backdrop-blur-sm hover:bg-white dark:hover:bg-surface-100 text-surface-700 dark:text-surface-300 text-xs rounded-full transition-all shadow-soft hover:shadow-soft-lg font-medium"
               >
                 重试
               </button>
@@ -99,18 +92,17 @@ export default function App() {
           )}
         </div>
 
-        {/* Right panel */}
         {rightPanelOpen && (
-          <div className="w-72 shrink-0 border-l border-surface-200 dark:border-surface-200 overflow-hidden flex flex-col bg-surface-50 dark:bg-surface-50">
-            <FilterPanel />
-            <div className="flex-1 min-h-0 border-t border-surface-200 dark:border-surface-200">
+          <div className="w-72 shrink-0 bg-surface-50/80 dark:bg-surface-50/80 backdrop-blur-sm border-l border-surface-200/60 dark:border-surface-200/30 flex flex-col overflow-hidden">
+            <div className="flex-1 overflow-y-auto">
+              <FilterPanel />
+              <div className="border-t border-surface-200/40 dark:border-surface-200/20" />
               <MetadataPanel />
             </div>
           </div>
         )}
       </div>
 
-      {/* Status bar */}
       <StatusBar />
     </div>
   );

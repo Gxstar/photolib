@@ -6,9 +6,7 @@ import { getThumbnailPath, isTauri } from "../../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { VirtuosoGrid } from "react-virtuoso";
 
-// ========== 缩略图并发限流（双优先级队列） ==========
-// 快格式（JPEG/PNG/WebP/BMP）优先于慢格式（RAW/HEIC/TIFF/AVIF）
-// 避免 RAW 卡住大量 JPEG 的加载
+// ========== Thumbnail concurrency limiter ==========
 const MAX_CONCURRENT = 2;
 let running = 0;
 const pendingFast: Array<() => void> = [];
@@ -36,20 +34,16 @@ function acquireSlot(slow: boolean): Promise<void> {
 
 function releaseSlot() {
   running--;
-  // 快队列优先
   const next = pendingFast.shift() || pendingSlow.shift();
   if (next) next();
 }
 
-// 切换目录时清空排队中的旧缩略图请求
 function cancelAllPending() {
   pendingFast.length = 0;
   pendingSlow.length = 0;
 }
-// ====================================================
 
-// ========== 缩略图全局缓存（跨 mount/unmount 持久化） ==========
-// 避免 Virtuoso 滚动回收 Cell 后再次进入时重新请求
+// ========== Global thumbnail cache ==========
 type ThumbState = { src: string; error: boolean };
 const thumbGlobalCache = new Map<number, ThumbState>();
 const inflightRequests = new Map<number, Promise<ThumbState>>();
@@ -86,7 +80,6 @@ async function requestThumbnail(id: number, filePath: string, mediaType: string)
   thumbGlobalCache.set(id, result);
   return result;
 }
-// ============================================================
 
 interface ThumbnailGridProps {
   photos: Photo[];
@@ -95,14 +88,12 @@ interface ThumbnailGridProps {
 export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
   const { isLoading, selectedIds, toggleSelect, thumbnailSize, setThumbnailSize } = useAppStore();
 
-  // 目录切换时清空旧 pending 请求
   useEffect(() => {
     cancelAllPending();
   }, [photos]);
 
-  const cellSize = thumbnailSize + 6;
+  const cellSize = thumbnailSize + 8;
 
-  // 用 ref 持有 photos 数组，避免 itemContent 因 photos 引用变化频繁重建
   const photosRef = useRef(photos);
   photosRef.current = photos;
 
@@ -110,7 +101,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
     (index: number) => {
       const photo = photosRef.current[index];
       return (
-        <div style={{ width: cellSize, height: cellSize }} className="p-0.5">
+        <div style={{ width: cellSize, height: cellSize }} className="p-1">
           <ThumbnailCell
             key={photo.id}
             photo={photo}
@@ -126,20 +117,23 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Size slider */}
-      <div className="flex items-center gap-3 px-4 py-2 bg-surface-50 dark:bg-surface-50 border-b border-surface-200 dark:border-surface-200 shrink-0">
-        <ZoomOut size={12} className="text-surface-400" />
-        <input
-          type="range"
-          min={120}
-          max={320}
-          value={thumbnailSize}
-          onChange={(e) => setThumbnailSize(Number(e.target.value))}
-          className="flex-1 h-1 bg-surface-200 dark:bg-surface-200 rounded-full appearance-none cursor-pointer accent-accent-500"
-        />
-        <ZoomIn size={12} className="text-surface-400" />
-        <div className="flex items-center gap-1.5 ml-2 text-2xs text-surface-400 font-medium tabular-nums">
-          <Images size={11} />
+      {/* Size slider — polished */}
+      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-surface-200/40 dark:border-surface-200/20 shrink-0 bg-surface-50/40 dark:bg-surface-50/20 backdrop-blur-sm">
+        <ZoomOut size={13} className="text-surface-400" />
+        <div className="relative flex-1 h-2">
+          <div className="absolute inset-0 rounded-full bg-surface-200/60 dark:bg-surface-200/30" />
+          <input
+            type="range"
+            min={120}
+            max={320}
+            value={thumbnailSize}
+            onChange={(e) => setThumbnailSize(Number(e.target.value))}
+            className="absolute inset-0 w-full h-2 appearance-none bg-transparent cursor-pointer z-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-accent-400 [&::-webkit-slider-thumb]:to-accent-600 [&::-webkit-slider-thumb]:shadow-[0_2px_8px_rgba(99,102,241,0.3)] [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:duration-200 hover:[&::-webkit-slider-thumb]:scale-110 active:[&::-webkit-slider-thumb]:scale-95"
+          />
+        </div>
+        <ZoomIn size={13} className="text-surface-400" />
+        <div className="flex items-center gap-1.5 ml-1 text-2xs text-surface-400 font-medium tabular-nums shrink-0">
+          <Images size={12} />
           {photos.length} 张
         </div>
       </div>
@@ -147,16 +141,16 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
       {/* Virtual grid */}
       <div className="flex-1">
         {photos.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-surface-400 animate-fade-in">
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-surface-400 animate-fade-in">
             {isLoading ? (
               <>
-                <div className="w-5 h-5 border-2 border-surface-300 border-t-accent-500 rounded-full animate-spin" />
+                <div className="w-6 h-6 rounded-full border-2 border-surface-300/60 border-t-accent-500 animate-spin" />
                 <span className="text-xs">扫描文件中...</span>
               </>
             ) : (
               <>
-                <div className="w-14 h-14 rounded-2xl bg-surface-100 dark:bg-surface-100 flex items-center justify-center">
-                  <ImageOff size={24} strokeWidth={1.5} className="text-surface-300" />
+                <div className="w-16 h-16 rounded-2xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">
+                  <ImageOff size={26} strokeWidth={1.5} className="text-surface-400" />
                 </div>
                 <span className="text-xs">此目录没有照片</span>
               </>
@@ -167,7 +161,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
             style={{ height: "100%" }}
             totalCount={photos.length}
             itemContent={itemContent}
-            listClassName="flex flex-wrap gap-0.5 p-2 content-start"
+            listClassName="flex flex-wrap gap-0.5 p-2.5 content-start"
             increaseViewportBy={400}
             computeItemKey={(index) => photos[index].id}
           />
@@ -197,7 +191,6 @@ const ThumbnailCell = memo(function ThumbnailCell({
   onSelect: (multi: boolean) => void;
   cellSize: number;
 }) {
-  // 初始 state 从全局缓存取，避免重复加载时闪烁
   const initial = thumbGlobalCache.get(photo.id);
   const [imgSrc, setImgSrc] = useState(initial?.src ?? "");
   const [imgError, setImgError] = useState(initial?.error ?? false);
@@ -206,7 +199,6 @@ const ThumbnailCell = memo(function ThumbnailCell({
   useEffect(() => {
     const cached = thumbGlobalCache.get(photo.id);
     if (cached) {
-      // 命中缓存：直接同步设置，无 loading 闪烁
       if (cached.src !== imgSrc) setImgSrc(cached.src);
       if (cached.error !== imgError) setImgError(cached.error);
       if (loading) setLoading(false);
@@ -231,21 +223,17 @@ const ThumbnailCell = memo(function ThumbnailCell({
     <div
       onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
       onDoubleClick={() => {/* TODO: preview */}}
-      className={`relative rounded-xl overflow-hidden transition-all duration-200 ${
-        selected
-          ? "ring-2 ring-accent-500 shadow-lg shadow-accent-500/20"
-          : "hover:ring-2 hover:ring-accent-300 hover:shadow-md"
-      }`}
+      className={`thumb-cell ${selected ? "selected" : ""}`}
       style={{ width: cellSize, height: cellSize }}
     >
       <div
-        className="relative bg-surface-100 dark:bg-surface-100 rounded-xl overflow-hidden"
-        style={{ width: cellSize, height: cellSize }}
+        className="relative bg-surface-100 dark:bg-surface-100 overflow-hidden"
+        style={{ width: cellSize, height: cellSize, borderRadius: "inherit" }}
       >
         {/* Skeleton */}
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-5 h-5 border-2 border-surface-300 border-t-accent-500 rounded-full animate-spin" />
+            <div className="w-6 h-6 rounded-full border-2 border-surface-300/60 border-t-accent-500 animate-spin" />
           </div>
         )}
 
@@ -262,21 +250,21 @@ const ThumbnailCell = memo(function ThumbnailCell({
 
         {/* Error state */}
         {imgError && (
-          <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-surface-400 p-2">
-            <ImageOff size={16} strokeWidth={1.5} />
+          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-surface-400 p-3">
+            <ImageOff size={18} strokeWidth={1.5} />
             <span className="text-3xs text-center leading-tight break-all">{photo.fileName}</span>
           </div>
         )}
 
-        {/* Filename overlay */}
-        <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/70 via-black/30 to-transparent">
-          <p className="text-3xs text-white/90 truncate leading-tight font-medium">{photo.fileName}</p>
+        {/* Glass filename overlay */}
+        <div className="absolute bottom-0 left-0 right-0 p-2.5 bg-black/30 backdrop-blur-sm">
+          <p className="text-3xs text-white/90 truncate leading-tight font-medium drop-shadow-sm">{photo.fileName}</p>
         </div>
 
-        {/* Selection indicator */}
+        {/* Selection indicator — checkmark circle */}
         {selected && (
-          <div className="absolute top-2 left-2 w-4 h-4 rounded-full bg-accent-500 flex items-center justify-center shadow-sm">
-            <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+          <div className="absolute top-2 left-2 w-5 h-5 rounded-full bg-accent-500 flex items-center justify-center shadow-md shadow-accent-500/30 animate-scale-in">
+            <svg className="w-3 h-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="20 6 9 17 4 12" />
             </svg>
           </div>
@@ -285,29 +273,29 @@ const ThumbnailCell = memo(function ThumbnailCell({
         {/* Flag */}
         {photo.flag === "pick" && (
           <div className="absolute top-2 right-2">
-            <div className="w-4 h-4 rounded-full bg-green-500/90 flex items-center justify-center shadow-sm">
-              <Flag size={8} className="text-white" />
+            <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center shadow-sm shadow-green-500/30">
+              <Flag size={9} className="text-white" />
             </div>
           </div>
         )}
         {photo.flag === "reject" && (
           <div className="absolute top-2 right-2">
-            <div className="w-4 h-4 rounded-full bg-red-500/90 flex items-center justify-center shadow-sm">
-              <Flag size={8} className="text-white" />
+            <div className="w-5 h-5 rounded-full bg-red-500 flex items-center justify-center shadow-sm shadow-red-500/30">
+              <Flag size={9} className="text-white" />
             </div>
           </div>
         )}
 
-        {/* Color label */}
+        {/* Color label — refined bar */}
         {photo.colorLabel && colorLabelMap[photo.colorLabel] && (
-          <div className="absolute top-0 left-0 right-0 h-1" style={{ backgroundColor: colorLabelMap[photo.colorLabel] }} />
+          <div className="absolute top-0 left-0 right-0 h-1.5 rounded-t-[16px]" style={{ backgroundColor: colorLabelMap[photo.colorLabel] }} />
         )}
 
-        {/* Rating */}
+        {/* Rating — glow stars */}
         {photo.rating > 0 && (
-          <div className="absolute bottom-6 left-2 flex gap-0.5">
+          <div className="absolute bottom-8 left-2.5 flex gap-0.5">
             {Array.from({ length: photo.rating }).map((_, i) => (
-              <Star key={i} size={8} className="text-yellow-400 fill-yellow-400 drop-shadow-sm" />
+              <Star key={i} size={9} className="text-yellow-400 fill-yellow-400 drop-shadow-[0_0_4px_rgba(250,204,21,0.5)]" />
             ))}
           </div>
         )}
@@ -315,8 +303,6 @@ const ThumbnailCell = memo(function ThumbnailCell({
     </div>
   );
 }, (prev, next) => {
-  // 自定义比较：忽略 EXIF 字段（缩略图独立缓存，不影响显示），
-  // 但保留 rating/flag/colorLabel/selected/cellSize 以响应用户交互
   return (
     prev.photo.id === next.photo.id &&
     prev.photo.filePath === next.photo.filePath &&

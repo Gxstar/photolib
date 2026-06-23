@@ -18,10 +18,10 @@ import {
 } from "lucide-react";
 
 const viewModes: { mode: ViewMode; icon: React.ReactNode; label: string }[] = [
-  { mode: "grid", icon: <Grid3x3 size={15} />, label: "网格" },
-  { mode: "list", icon: <List size={15} />, label: "列表" },
-  { mode: "preview", icon: <Eye size={15} />, label: "预览" },
-  { mode: "compare", icon: <Columns2 size={15} />, label: "对比" },
+  { mode: "grid", icon: <Grid3x3 size={14} />, label: "网格" },
+  { mode: "list", icon: <List size={14} />, label: "列表" },
+  { mode: "preview", icon: <Eye size={14} />, label: "预览" },
+  { mode: "compare", icon: <Columns2 size={14} />, label: "对比" },
 ];
 
 const sortOptions = [
@@ -96,37 +96,37 @@ export function Toolbar() {
   };
 
   return (
-    <div className="flex items-center gap-1.5 h-11 px-3 bg-surface-50 dark:bg-surface-50 border-b border-surface-200 dark:border-surface-200 shrink-0">
+    <div className="flex items-center gap-2 h-12 px-3 glass-panel shrink-0 relative z-10">
       {/* App brand */}
-      <div className="flex items-center gap-2 mr-2">
-        <div className="w-6 h-6 rounded-md bg-accent-500 flex items-center justify-center">
-          <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <div className="flex items-center gap-2.5 mr-2">
+        <div className="w-7 h-7 rounded-xl bg-accent-500 flex items-center justify-center shadow-sm shadow-accent-500/20">
+          <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
             <circle cx="8.5" cy="8.5" r="1.5" />
             <polyline points="21 15 16 10 5 21" />
           </svg>
         </div>
-        <span className="text-sm font-semibold text-surface-800 dark:text-surface-200 tracking-tight hidden sm:inline">PhotoLib</span>
+        <span className="text-sm font-semibold text-accent-600 dark:text-accent-400 tracking-tight hidden sm:inline">PhotoLib</span>
       </div>
 
-      <div className="w-px h-5 bg-surface-200 dark:bg-surface-200 mx-1" />
+      <div className="w-px h-6 bg-surface-200/60 dark:bg-surface-200/20 mx-0.5" />
 
       {/* Panel toggles */}
       <button
         onClick={toggleLeftPanel}
-        className={`p-1.5 rounded-lg transition-all duration-150 ${leftPanelOpen ? "bg-accent-500/10 text-accent-600 dark:text-accent-400" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-100"}`}
+        className={`p-2 rounded-full transition-all duration-200 ${leftPanelOpen ? "bg-accent-500/10 text-accent-600 dark:text-accent-400" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400 hover:bg-surface-100/70 dark:hover:bg-surface-100/50"}`}
         title="切换左侧面板"
       >
         <PanelLeft size={15} />
       </button>
 
       {/* View modes */}
-      <div className="flex items-center bg-surface-100 dark:bg-surface-100 rounded-lg p-0.5 gap-0.5">
+      <div className="flex items-center bg-surface-100/60 dark:bg-surface-100/40 backdrop-blur-sm rounded-full p-0.5 gap-0.5 border border-surface-200/40 dark:border-surface-200/20">
         {viewModes.map(({ mode, icon, label }) => (
           <button
             key={mode}
             onClick={() => setViewMode(mode)}
-            className={`p-1.5 rounded-md transition-all duration-150 ${viewMode === mode ? "bg-surface-0 dark:bg-surface-0 text-surface-800 dark:text-surface-200 shadow-sm" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400"}`}
+            className={`p-1.5 rounded-full transition-all duration-200 ${viewMode === mode ? "bg-white dark:bg-surface-0 text-surface-800 dark:text-surface-200 shadow-sm" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400"}`}
             title={label}
           >
             {icon}
@@ -134,10 +134,10 @@ export function Toolbar() {
         ))}
       </div>
 
-      <div className="w-px h-5 bg-surface-200 dark:bg-surface-200 mx-1" />
+      <div className="w-px h-6 bg-surface-200/60 dark:bg-surface-200/20 mx-0.5" />
 
       {/* Sort */}
-      <div className="flex items-center gap-1 bg-surface-100 dark:bg-surface-100 rounded-lg px-2 py-1">
+      <div className="flex items-center gap-1.5 bg-surface-100/60 dark:bg-surface-100/40 backdrop-blur-sm rounded-full px-3 py-1.5 border border-surface-200/40 dark:border-surface-200/20">
         <ArrowUpDown size={12} className="text-surface-400" />
         <select
           value={sortBy}
@@ -161,7 +161,7 @@ export function Toolbar() {
       <div className="flex-1" />
 
       {/* Search */}
-      <div className="flex items-center gap-2 bg-surface-100 dark:bg-surface-100 rounded-lg px-3 py-1.5 border border-transparent focus-within:border-accent-300 focus-within:shadow-sm transition-all">
+      <div className="flex items-center gap-2 bg-surface-100/60 dark:bg-surface-100/40 backdrop-blur-sm rounded-full px-3.5 py-1.5 border border-transparent focus-within:border-accent-300/50 focus-within:shadow-soft transition-all">
         <Search size={13} className="text-surface-400" />
         <input
           type="text"
@@ -174,28 +174,29 @@ export function Toolbar() {
       {/* Theme toggle */}
       <button
         onClick={toggleTheme}
-        className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 dark:hover:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-100 transition-all"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-2xs font-medium transition-all duration-200 bg-surface-100/60 dark:bg-surface-100/40 hover:bg-surface-200/50 dark:hover:bg-surface-200/30 text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 border border-surface-200/40 dark:border-surface-200/20"
         title={theme === "light" ? "切换暗色主题" : "切换亮色主题"}
       >
-        {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+        {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
+        {theme === "light" ? "暗色" : "亮色"}
       </button>
 
       {/* Import button */}
       <button
         onClick={handleImport}
         disabled={importing}
-        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-accent-500 hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-lg transition-all shadow-sm hover:shadow-md"
+        className="flex items-center gap-1.5 px-4 py-1.5 bg-accent-500 hover:bg-accent-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium rounded-full transition-all shadow-sm shadow-accent-500/20 hover:shadow-md hover:shadow-accent-500/30"
         title="导入照片"
       >
         {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
         导入
       </button>
 
-      <div className="w-px h-5 bg-surface-200 dark:bg-surface-200 mx-1" />
+      <div className="w-px h-6 bg-surface-200/60 dark:bg-surface-200/20 mx-0.5" />
 
       <button
         onClick={toggleRightPanel}
-        className={`p-1.5 rounded-lg transition-all duration-150 ${rightPanelOpen ? "bg-accent-500/10 text-accent-600 dark:text-accent-400" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-100"}`}
+        className={`p-2 rounded-full transition-all duration-200 ${rightPanelOpen ? "bg-accent-500/10 text-accent-600 dark:text-accent-400" : "text-surface-400 hover:text-surface-600 dark:hover:text-surface-400 hover:bg-surface-100/70 dark:hover:bg-surface-100/50"}`}
         title="切换右侧面板"
       >
         <PanelRight size={15} />
