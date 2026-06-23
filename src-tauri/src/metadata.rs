@@ -55,7 +55,9 @@ fn read_image_dimensions(file_path: &Path) -> (Option<i64>, Option<i64>) {
 fn fields_from_exif(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields> {
     let (dim_w, dim_h) = read_image_dimensions(file_path);
     Ok(ExifFields {
-        date_taken: get_str(exif, ExifTag::DateTimeOriginal),
+        date_taken: get_str(exif, ExifTag::DateTimeOriginal)
+            .or_else(|| get_str(exif, ExifTag::CreateDate))
+            .or_else(|| get_str(exif, ExifTag::ModifyDate)),
         camera_make: get_str(exif, ExifTag::Make),
         camera_model: get_str(exif, ExifTag::Model),
         lens_model: get_str(exif, ExifTag::LensModel),

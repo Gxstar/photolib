@@ -192,3 +192,15 @@ export async function preloadThumbnails(folderPath: string): Promise<number> {
   const invoke = await getInvoke();
   return invoke<number>("preload_thumbnails", { folderPath });
 }
+
+/// 监听目录文件变化 — 通过 notify 实时推送
+export async function watchDirectory(path: string): Promise<void> {
+  const invoke = await getInvoke();
+  return invoke<void>("watch_directory", { path });
+}
+
+/// 停止监听当前目录
+export async function unwatchDirectory(): Promise<void> {
+  const invoke = await getInvoke();
+  return invoke<void>("unwatch_directory");
+}

@@ -1,5 +1,4 @@
 // PhotoLib - Rust backend library
-// 模块化架构: db / scanner / metadata / thumbnail / export / watcher
 
 pub mod db;
 pub mod models;
@@ -7,7 +6,7 @@ pub mod scanner;
 pub mod metadata;
 pub mod thumbnail;
 pub mod export;
-pub mod watcher;
+pub mod watchdog;
 pub mod commands;
 
 use tauri::Manager;
@@ -19,7 +18,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 初始化数据库
             let app_dir = dirs::data_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join("photolib");
@@ -28,6 +26,8 @@ pub fn run() {
 
             db::init_db(&db_path)?;
             app.manage(db::AppDatabase { path: db_path });
+
+            app.manage(watchdog::Watchdog::new());
 
             Ok(())
         })
@@ -51,6 +51,8 @@ pub fn run() {
             commands::get_albums,
             commands::add_album,
             commands::remove_album,
+            commands::watch_directory,
+            commands::unwatch_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PhotoLib");

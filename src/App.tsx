@@ -6,6 +6,7 @@ import { LeftPanel } from "./components/panel/LeftPanel";
 import { FilterPanel } from "./components/panel/FilterPanel";
 import { MetadataPanel } from "./components/panel/MetadataPanel";
 import { ThumbnailGrid } from "./components/browser/ThumbnailGrid";
+import { watchDirectory, unwatchDirectory, isTauri } from "./api";
 
 export default function App() {
   const {
@@ -18,6 +19,8 @@ export default function App() {
     photos,
     theme,
     setTheme,
+    currentDir,
+    leftTab,
   } = useAppStore();
 
   useEffect(() => {
@@ -27,6 +30,16 @@ export default function App() {
       document.documentElement.classList.remove("dark");
     }
   }, [theme]);
+
+  // Watch current directory for file changes
+  useEffect(() => {
+    if (!isTauri() || !currentDir || leftTab !== "directory") {
+      if (isTauri()) unwatchDirectory().catch(() => {});
+      return;
+    }
+    watchDirectory(currentDir).catch(() => {});
+    return () => { unwatchDirectory().catch(() => {}); };
+  }, [currentDir, leftTab]);
 
   const filteredPhotos = useMemo(() => {
     return photos

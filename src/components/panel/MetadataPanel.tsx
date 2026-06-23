@@ -1,6 +1,9 @@
 import { useAppStore } from "../../stores/appStore";
 import type { Photo } from "../../types";
-import { Camera, Aperture, Timer, Sun, MapPin, FileImage, Ruler, Calendar, Star, Flag, Tag, Hash, ChevronDown } from "lucide-react";
+import {
+  Camera, Aperture, Timer, Sun, MapPin, FileImage,
+  Star, Flag, Tag, ChevronDown, Hash, Ruler, Navigation,
+} from "lucide-react";
 import { useState } from "react";
 
 export function MetadataPanel() {
@@ -24,99 +27,224 @@ export function MetadataPanel() {
     );
   }
 
+  const megapixels = photo.imageWidth > 0 && photo.imageHeight > 0
+    ? ((photo.imageWidth * photo.imageHeight) / 1_000_000).toFixed(1)
+    : null;
+
   return (
     <div className="flex flex-col">
+      {/* Header */}
       <div className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase tracking-wider flex items-center gap-1.5">
         <FileImage size={13} />
         元数据
       </div>
-      <div className="pb-2 px-2.5 space-y-1.5">
-        <MetaSection title="文件信息" icon={<Hash size={11} />} defaultOpen>
-          <MetaRow label="文件名" value={photo.fileName} />
-          <MetaRow label="类型" value={photo.mediaType.toUpperCase()} />
-          {photo.imageWidth > 0 && photo.imageHeight > 0 && (
-            <MetaRow label="尺寸" value={`${photo.imageWidth} × ${photo.imageHeight}`} />
-          )}
-          <MetaRow label="大小" value={formatFileSize(photo.fileSize)} />
-        </MetaSection>
 
-        <MetaSection title="相机" icon={<Camera size={11} />}>
-          <MetaRow label="制造商" value={photo.cameraMake} />
-          <MetaRow label="型号" value={photo.cameraModel} />
-          <MetaRow label="镜头" value={photo.lensModel} />
-          <MetaRow label="镜头品牌" value={photo.lensMake} />
-        </MetaSection>
+      <div className="pb-2 px-2.5 space-y-2">
 
-        <MetaSection title="曝光参数" icon={<Aperture size={11} />}>
-          <MetaRow label="拍摄时间" value={formatDate(photo.dateTaken)} icon={<Calendar size={9} />} />
-          <MetaRow label="快门" value={photo.shutterSpeed} icon={<Timer size={9} />} />
-          <MetaRow label="光圈" value={`f/${photo.aperture}`} icon={<Aperture size={9} />} />
-          <MetaRow label="ISO" value={`${photo.iso}`} icon={<Sun size={9} />} />
-          <MetaRow label="曝光补偿" value={`${photo.exposureComp > 0 ? "+" : ""}${photo.exposureComp} EV`} />
-          <MetaRow label="曝光程序" value={photo.exposureProgram} />
-          <MetaRow label="焦距" value={`${photo.focalLength}mm`} icon={<Ruler size={9} />} />
-          <MetaRow label="35mm" value={photo.focalLength35mm ? `${photo.focalLength35mm}mm` : ""} />
-          <MetaRow label="最大光圈" value={photo.maxAperture ? `f/${photo.maxAperture}` : ""} />
-          <MetaRow label="闪光灯" value={photo.flash ? "开启" : "关闭"} />
-          <MetaRow label="白平衡" value={photo.whiteBalance} />
-          <MetaRow label="测光模式" value={photo.meteringMode} />
-          <MetaRow label="场景" value={photo.sceneCaptureType} />
-          <MetaRow label="对比度" value={photo.contrast} />
-        </MetaSection>
+        {/* ========== Hero: 文件名 + 基本信息 ========== */}
+        <div className="bg-surface-100/40 dark:bg-surface-100/20 rounded-xl border border-surface-200/30 dark:border-surface-200/15 p-3 space-y-2">
+          {/* 文件名 */}
+          <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200 break-all leading-snug">
+            {photo.fileName}
+          </h3>
 
-        {(photo.latitude || photo.longitude) && (
-          <MetaSection title="GPS" icon={<MapPin size={11} />}>
-            <MetaRow label="坐标" value={`${photo.latitude!.toFixed(6)}, ${photo.longitude!.toFixed(6)}`} />
-            {photo.altitude != null && (
-              <MetaRow label="海拔" value={`${(photo.altitude as number).toFixed(1)}m`} />
+          {/* 日期 · 大小 · 分辨率 */}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-2xs text-surface-400">
+            {(() => {
+              const items: string[] = [];
+              const d = formatDateShort(photo.dateTaken);
+              if (d) items.push(d);
+              items.push(formatFileSize(photo.fileSize));
+              if (photo.imageWidth > 0 && photo.imageHeight > 0) {
+                let s = `${photo.imageWidth} × ${photo.imageHeight}`;
+                if (megapixels) s += ` · ${megapixels} MP`;
+                items.push(s);
+              }
+              return items.map((text, i) => (
+                <>
+                  {i > 0 && <span className="text-surface-300">·</span>}
+                  <span key={i}>{text}</span>
+                </>
+              ));
+            })()}
+          </div>
+
+          {/* 评分 + 色标 + 旗标 */}
+          <div className="flex items-center gap-2">
+            {photo.rating > 0 && (
+              <div className="flex gap-0.5">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <Star
+                    key={i}
+                    size={11}
+                    className={i < photo.rating ? "text-yellow-500 fill-yellow-500" : "text-surface-300"}
+                  />
+                ))}
+              </div>
             )}
-          </MetaSection>
+            {photo.colorLabel && (
+              <span
+                className="w-3 h-3 rounded-full"
+                style={{ backgroundColor: labelColor(photo.colorLabel) }}
+              />
+            )}
+            {photo.flag === "pick" && (
+              <span className="text-2xs font-medium text-green-600 dark:text-green-400">Pick</span>
+            )}
+            {photo.flag === "reject" && (
+              <span className="text-2xs font-medium text-red-600 dark:text-red-400">Reject</span>
+            )}
+          </div>
+        </div>
+
+        {/* ========== 相机信息 ========== */}
+        <InfoCard>
+          <InfoRow
+            icon={<Camera size={14} className="text-surface-400" />}
+            label="相机"
+            value={cameraDisplay(photo)}
+          />
+          <InfoRow
+            icon={<Aperture size={14} className="text-surface-400" />}
+            label="镜头"
+            value={photo.lensModel}
+          />
+          {photo.imageWidth > 0 && photo.imageHeight > 0 && (
+            <InfoRow
+              icon={<Hash size={14} className="text-surface-400" />}
+              label="分辨率"
+              value={`${photo.imageWidth} × ${photo.imageHeight}${megapixels ? ` · ${megapixels} MP` : ""}`}
+            />
+          )}
+        </InfoCard>
+
+        {/* ========== 曝光参数 — 2×3 网格 ========== */}
+        <InfoCard>
+          <div className="grid grid-cols-3 gap-y-3 gap-x-2">
+            <GridCell label="ISO" value={`${photo.iso || "—"}`} />
+            <GridCell label="光圈" value={photo.aperture ? `f/${photo.aperture}` : "—"} />
+            <GridCell label="曝光补偿" value={photo.exposureComp ? `${photo.exposureComp > 0 ? "+" : ""}${photo.exposureComp} EV` : "—"} />
+            <GridCell label="快门" value={photo.shutterSpeed || "—"} />
+            <GridCell label="焦距" value={photo.focalLength ? `${photo.focalLength}mm` : "—"} />
+            <GridCell label="测光模式" value={photo.meteringMode || "—"} />
+          </div>
+        </InfoCard>
+
+        {/* ========== GPS ========== */}
+        {(photo.latitude || photo.longitude) && (
+          <InfoCard>
+            <div className="flex items-center gap-2">
+              <MapPin size={14} className="text-accent-500 shrink-0" />
+              <span className="text-xs font-medium text-accent-600 dark:text-accent-400">
+                {photo.latitude?.toFixed(4)}°N {photo.longitude?.toFixed(4)}°E
+              </span>
+              {photo.altitude != null && (
+                <span className="text-2xs text-surface-400">{photo.altitude.toFixed(1)}m</span>
+              )}
+            </div>
+          </InfoCard>
         )}
 
-        <MetaSection title="标记" icon={<Tag size={11} />}>
-          <MetaRow label="评分" value={"★".repeat(photo.rating) + "☆".repeat(5 - photo.rating)} icon={<Star size={9} />} />
-          <MetaRow label="色标" value={photo.colorLabel || "无"} />
-          <MetaRow label="旗标" value={photo.flag === "pick" ? "Pick" : photo.flag === "reject" ? "Reject" : "无"} icon={<Flag size={9} />} />
-          {photo.notes && <MetaRow label="备注" value={photo.notes} />}
-        </MetaSection>
+        {/* ========== 更多参数（折叠） ========== */}
+        <MoreSection photo={photo} />
+
       </div>
     </div>
   );
 }
 
-function MetaSection({ title, children, icon, defaultOpen }: { title: string; children: React.ReactNode; icon?: React.ReactNode; defaultOpen?: boolean }) {
-  const [collapsed, setCollapsed] = useState(!(defaultOpen ?? false));
+// ==================== Components ====================
+
+function InfoCard({ children }: { children: React.ReactNode }) {
   return (
-    <div className="bg-surface-100/40 dark:bg-surface-100/20 rounded-xl border border-surface-200/30 dark:border-surface-200/15 overflow-hidden">
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="w-full flex items-center gap-1.5 px-2.5 py-2 text-2xs font-semibold text-surface-500 uppercase tracking-wider hover:bg-surface-100/50 dark:hover:bg-surface-100/20 transition-colors"
-      >
-        <ChevronDown size={10} className={`transition-transform duration-200 ${collapsed ? "-rotate-90" : ""}`} />
-        {icon}
-        {title}
-      </button>
-      {!collapsed && <div className="pb-1.5">{children}</div>}
+    <div className="bg-surface-100/40 dark:bg-surface-100/20 rounded-xl border border-surface-200/30 dark:border-surface-200/15 p-2.5 space-y-2">
+      {children}
     </div>
   );
 }
 
-function MetaRow({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: string;
-  icon?: React.ReactNode;
-}) {
+function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  if (!value) return null;
   return (
-    <div className="flex items-start gap-2 px-2.5 py-0.5 text-xs group">
-      {icon && <span className="text-surface-400 mt-px shrink-0">{icon}</span>}
-      <span className="text-surface-400 shrink-0 w-12 text-2xs leading-5">{label}</span>
-      <span className="text-surface-700 dark:text-surface-300 break-all leading-5 font-medium">{value}</span>
+    <div className="flex items-center gap-2">
+      <span className="shrink-0 w-5 flex justify-center">{icon}</span>
+      <span className="text-2xs text-surface-400 shrink-0 w-10">{label}</span>
+      <span className="flex-1 text-right text-xs font-medium text-surface-700 dark:text-surface-300 truncate">
+        {value}
+      </span>
     </div>
   );
+}
+
+function GridCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="text-center">
+      <div className="text-2xs text-surface-400 mb-0.5">{label}</div>
+      <div className="text-sm font-semibold text-surface-800 dark:text-surface-200">{value}</div>
+    </div>
+  );
+}
+
+function MoreSection({ photo }: { photo: Photo }) {
+  const [open, setOpen] = useState(false);
+  const hasMore = photo.focalLength35mm || photo.maxAperture || photo.flash || photo.whiteBalance || photo.exposureProgram || photo.sceneCaptureType || photo.contrast || photo.software || photo.copyright || photo.notes;
+
+  if (!hasMore) return null;
+
+  return (
+    <div className="bg-surface-100/40 dark:bg-surface-100/20 rounded-xl border border-surface-200/30 dark:border-surface-200/15 overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-1.5 px-2.5 py-2 text-2xs font-semibold text-surface-500 uppercase tracking-wider hover:bg-surface-100/50 dark:hover:bg-surface-100/20 transition-colors"
+      >
+        <ChevronDown size={10} className={`transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+        <Tag size={11} />
+        更多
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2.5 pt-1 space-y-1">
+          {photo.focalLength35mm && <MetaRow label="35mm焦距" value={`${photo.focalLength35mm}mm`} />}
+          {photo.maxAperture && <MetaRow label="最大光圈" value={`f/${photo.maxAperture}`} />}
+          {photo.exposureProgram && <MetaRow label="曝光程序" value={photo.exposureProgram} />}
+          {photo.whiteBalance && <MetaRow label="白平衡" value={photo.whiteBalance} />}
+          {photo.meteringMode && <MetaRow label="测光模式" value={photo.meteringMode} />}
+          {photo.flash !== undefined && <MetaRow label="闪光灯" value={photo.flash ? "开启" : "关闭"} />}
+          {photo.sceneCaptureType && <MetaRow label="场景" value={photo.sceneCaptureType} />}
+          {photo.contrast && <MetaRow label="对比度" value={photo.contrast} />}
+          {photo.software && <MetaRow label="软件" value={photo.software} />}
+          {photo.copyright && <MetaRow label="版权" value={photo.copyright} />}
+          {photo.notes && <MetaRow label="备注" value={photo.notes} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-surface-400 shrink-0 w-14 text-2xs">{label}</span>
+      <span className="text-surface-700 dark:text-surface-300 font-medium truncate">{value}</span>
+    </div>
+  );
+}
+
+// ==================== Helpers ====================
+
+function cameraDisplay(photo: Photo): string {
+  const make = photo.cameraMake?.replace(/\s+$/, "");
+  const model = photo.cameraModel;
+  if (make && model && model.startsWith(make)) return model;
+  if (make && model) return `${make} ${model}`;
+  return model || make || "—";
+}
+
+function labelColor(label: string): string {
+  const map: Record<string, string> = {
+    red: "#ef4444", blue: "#3b82f6", green: "#22c55e",
+    yellow: "#eab308", purple: "#a855f7",
+  };
+  return map[label] || "#999";
 }
 
 function formatFileSize(bytes: number): string {
@@ -125,14 +253,11 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatDate(iso: string): string {
+function formatDateShort(iso: string): string {
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
   return d.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
   });
 }

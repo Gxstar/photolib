@@ -2,6 +2,7 @@
 
 use crate::models::Photo;
 use crate::scanner;
+use crate::watchdog::Watchdog;
 use tauri::{State, Emitter};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -1101,5 +1102,27 @@ pub async fn preload_thumbnails(folder_path: String) -> Result<usize, String> {
         );
         Ok(cached)
     }).await.map_err(|e| format!("join error: {}", e))?
+}
+
+/// 监听目录 — 使用 notify 实时监听文件增删改
+#[tauri::command]
+pub async fn watch_directory(
+    path: String,
+    db: State<'_, crate::db::AppDatabase>,
+    app: tauri::AppHandle,
+    watchdog: State<'_, Watchdog>,
+) -> Result<(), String> {
+    let dir = std::path::Path::new(&path);
+    watchdog.start(dir, &db.path, app);
+    Ok(())
+}
+
+/// 停止监听当前目录
+#[tauri::command]
+pub async fn unwatch_directory(
+    watchdog: State<'_, Watchdog>,
+) -> Result<(), String> {
+    watchdog.stop();
+    Ok(())
 }
 
