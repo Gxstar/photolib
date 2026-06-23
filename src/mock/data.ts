@@ -93,6 +93,17 @@ export const mockPhotos: Photo[] = cameras.map((cam, i) => ({
   longitude: 121.47 + Math.random() * 0.5,
   altitude: 4 + Math.random() * 200,
 
+  software: i % 2 === 0 ? "Adobe Lightroom Classic" : "Capture One",
+  copyright: i % 8 === 0 ? "© 2026 PhotoLib" : "",
+  imageDescription: i % 10 === 0 ? "Test shot" : "",
+  orientation: 1,
+  exposureProgram: ["手动", "程序自动", "光圈优先", "快门优先"][i % 4],
+  maxAperture: [1.4, 2.0, 2.8, 4.0][i % 4],
+  focalLength35mm: [24, 35, 50, 70, 85, 100, 135, 200][i % 8],
+  lensMake: cam.make,
+  sceneCaptureType: ["标准", "风景", "人像"][i % 3],
+  contrast: ["标准", "柔和", "锐利"][i % 3],
+
   rating: Math.floor(Math.random() * 6),
   colorLabel: colorLabels[i % colorLabels.length],
   flag: i % 7 === 0 ? "pick" : i % 11 === 0 ? "reject" : "",

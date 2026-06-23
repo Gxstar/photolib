@@ -35,9 +35,10 @@ export function MetadataPanel() {
         <MetadataSection title="文件信息" icon={<Hash size={10} />}>
           <MetaRow label="文件名" value={photo.fileName} />
           <MetaRow label="类型" value={photo.mediaType.toUpperCase()} />
-          <MetaRow label="尺寸" value={`${photo.imageWidth} × ${photo.imageHeight}`} />
+          {photo.imageWidth > 0 && photo.imageHeight > 0 && (
+            <MetaRow label="尺寸" value={`${photo.imageWidth} × ${photo.imageHeight}`} />
+          )}
           <MetaRow label="大小" value={formatFileSize(photo.fileSize)} />
-          <MetaRow label="色彩空间" value={photo.colorSpace} />
         </MetadataSection>
 
         {/* Camera */}
@@ -45,6 +46,7 @@ export function MetadataPanel() {
           <MetaRow label="制造商" value={photo.cameraMake} />
           <MetaRow label="型号" value={photo.cameraModel} />
           <MetaRow label="镜头" value={photo.lensModel} />
+          <MetaRow label="镜头品牌" value={photo.lensMake} />
         </MetadataSection>
 
         {/* Exposure */}
@@ -54,10 +56,15 @@ export function MetadataPanel() {
           <MetaRow label="光圈" value={`f/${photo.aperture}`} icon={<Aperture size={10} />} />
           <MetaRow label="ISO" value={`${photo.iso}`} icon={<Sun size={10} />} />
           <MetaRow label="曝光补偿" value={`${photo.exposureComp > 0 ? "+" : ""}${photo.exposureComp} EV`} />
+          <MetaRow label="曝光程序" value={photo.exposureProgram} />
           <MetaRow label="焦距" value={`${photo.focalLength}mm`} icon={<Ruler size={10} />} />
+          <MetaRow label="35mm焦距" value={photo.focalLength35mm ? `${photo.focalLength35mm}mm` : ""} />
+          <MetaRow label="最大光圈" value={photo.maxAperture ? `f/${photo.maxAperture}` : ""} />
           <MetaRow label="闪光灯" value={photo.flash ? "开启" : "关闭"} />
           <MetaRow label="白平衡" value={photo.whiteBalance} />
           <MetaRow label="测光模式" value={photo.meteringMode} />
+          <MetaRow label="场景模式" value={photo.sceneCaptureType} />
+          <MetaRow label="对比度" value={photo.contrast} />
         </MetadataSection>
 
         {/* GPS */}

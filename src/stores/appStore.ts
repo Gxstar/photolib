@@ -23,6 +23,16 @@ export interface ExifPatch {
   latitude?: number | null;
   longitude?: number | null;
   altitude?: number | null;
+  software?: string | null;
+  copyright?: string | null;
+  imageDescription?: string | null;
+  orientation?: number | null;
+  exposureProgram?: string | null;
+  maxAperture?: number | null;
+  focalLength35mm?: number | null;
+  lensMake?: string | null;
+  sceneCaptureType?: string | null;
+  contrast?: string | null;
 }
 
 interface AppState {
@@ -159,6 +169,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (patch.latitude !== undefined) updated.latitude = patch.latitude ?? null;
         if (patch.longitude !== undefined) updated.longitude = patch.longitude ?? null;
         if (patch.altitude !== undefined) updated.altitude = patch.altitude ?? null;
+        if (patch.software !== undefined) updated.software = patch.software || "";
+        if (patch.copyright !== undefined) updated.copyright = patch.copyright || "";
+        if (patch.imageDescription !== undefined) updated.imageDescription = patch.imageDescription || "";
+        if (patch.orientation !== undefined) updated.orientation = patch.orientation || 0;
+        if (patch.exposureProgram !== undefined) updated.exposureProgram = patch.exposureProgram || "";
+        if (patch.maxAperture !== undefined) updated.maxAperture = patch.maxAperture || 0;
+        if (patch.focalLength35mm !== undefined) updated.focalLength35mm = patch.focalLength35mm || 0;
+        if (patch.lensMake !== undefined) updated.lensMake = patch.lensMake || "";
+        if (patch.sceneCaptureType !== undefined) updated.sceneCaptureType = patch.sceneCaptureType || "";
+        if (patch.contrast !== undefined) updated.contrast = patch.contrast || "";
         return updated;
       });
       return { photos: next };

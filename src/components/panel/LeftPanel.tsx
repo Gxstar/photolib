@@ -40,6 +40,7 @@ export function LeftPanel() {
     setCurrentDir,
     setPhotos,
     setError,
+    setLoading,
     albums,
     setAlbums,
     selectedAlbumId,
@@ -89,13 +90,18 @@ export function LeftPanel() {
     const cached = cache.get(node.path);
     if (cached) {
       setPhotos(cached);
+      return;
     }
+
+    setPhotos([]);
+    setLoading(true);
 
     try {
       const photos = await openDirectory(node.path);
       if (navId !== navRef.current) return;
       cache.set(node.path, photos);
       setPhotos(photos);
+      setLoading(false);
 
       browseDirectory(node.path).then(entries => {
         const children: TreeNode[] = entries.map(e => ({
@@ -113,10 +119,11 @@ export function LeftPanel() {
       setTimeout(() => preloadThumbnails(dirPath).catch(() => {}), 500);
     } catch (err) {
       if (navId !== navRef.current) return;
+      setLoading(false);
       console.error("selectNode error:", err);
       setError("加载照片失败");
     }
-  }, [setCurrentDir, setSelectedAlbumId, setPhotos, setError]);
+  }, [setCurrentDir, setSelectedAlbumId, setPhotos, setLoading, setError]);
 
   useEffect(() => {
     if (leftTab !== "directory") return;

@@ -102,6 +102,9 @@ pub async fn get_photos(
                          exposure_comp, flash, white_balance, metering_mode,
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
                          rating, color_label, flag, notes
                   FROM photos ORDER BY date_taken DESC")
         .map_err(|e| e.to_string())?;
@@ -135,10 +138,20 @@ pub async fn get_photos(
                 latitude: row.get(22)?,
                 longitude: row.get(23)?,
                 altitude: row.get(24)?,
-                rating: row.get(25).unwrap_or(0),
-                color_label: row.get(26)?,
-                flag: row.get(27)?,
-                notes: row.get(28)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -148,7 +161,7 @@ pub async fn get_photos(
     Ok(photos)
 }
 
-/// 获取单张照片的完整 EXIF 元数据（kamadak-exif 原生解析）
+/// 获取单张照片的完整 EXIF 元数据（nom-exif 原生解析）
 #[tauri::command]
 pub async fn get_photo_metadata(
     file_path: String,
@@ -215,8 +228,14 @@ pub async fn import_photos(
                     focal_length, aperture, shutter_speed, iso,
                     exposure_comp, flash, white_balance, metering_mode,
                     image_width, image_height, color_space,
-                    latitude, longitude, altitude
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                    latitude, longitude, altitude,
+                    software, copyright, image_description, orientation,
+                    exposure_program, max_aperture, focal_length_35mm,
+                    lens_make, scene_capture_type, contrast
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                          ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                          ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+                          ?31, ?32)",
                 rusqlite::params![
                     dest_str, file_name, file_size, media_type,
                     exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
@@ -224,6 +243,9 @@ pub async fn import_photos(
                     exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
                     exif.image_width, exif.image_height, exif.color_space,
                     exif.latitude, exif.longitude, exif.altitude,
+                    exif.software, exif.copyright, exif.image_description, exif.orientation,
+                    exif.exposure_program, exif.max_aperture, exif.focal_length_35mm,
+                    exif.lens_make, exif.scene_capture_type, exif.contrast,
                 ],
             ).map_err(|e| e.to_string())?;
         }
@@ -370,6 +392,9 @@ pub async fn get_photos_by_folder(
                          exposure_comp, flash, white_balance, metering_mode,
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
                          rating, color_label, flag, notes
                   FROM photos
                   WHERE file_path LIKE ?1
@@ -405,10 +430,20 @@ pub async fn get_photos_by_folder(
                 latitude: row.get(22)?,
                 longitude: row.get(23)?,
                 altitude: row.get(24)?,
-                rating: row.get(25).unwrap_or(0),
-                color_label: row.get(26)?,
-                flag: row.get(27)?,
-                notes: row.get(28)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -450,6 +485,9 @@ pub async fn get_photos_by_folder_deep(
                          exposure_comp, flash, white_balance, metering_mode,
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
                          rating, color_label, flag, notes
                   FROM photos
                   WHERE file_path LIKE ?1
@@ -484,10 +522,20 @@ pub async fn get_photos_by_folder_deep(
                 latitude: row.get(22)?,
                 longitude: row.get(23)?,
                 altitude: row.get(24)?,
-                rating: row.get(25).unwrap_or(0),
-                color_label: row.get(26)?,
-                flag: row.get(27)?,
-                notes: row.get(28)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -623,6 +671,10 @@ pub async fn open_directory(
             image_height: e.height.map(|h| h as i64),
             color_space: None,
             latitude: None, longitude: None, altitude: None,
+            software: None, copyright: None, image_description: None,
+            orientation: None, exposure_program: None, max_aperture: None,
+            focal_length_35mm: None, lens_make: None,
+            scene_capture_type: None, contrast: None,
             rating: 0, color_label: None, flag: None, notes: None,
         }
     }).collect();
@@ -669,14 +721,20 @@ pub async fn open_directory(
                                     exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
                                     image_width=?13, image_height=?14, color_space=?15,
                                     latitude=?16, longitude=?17, altitude=?18,
+                                    software=?19, copyright=?20, image_description=?21, orientation=?22,
+                                    exposure_program=?23, max_aperture=?24, focal_length_35mm=?25,
+                                    lens_make=?26, scene_capture_type=?27, contrast=?28,
                                     exif_attempted=1
-                                 WHERE file_path=?19",
+                                 WHERE file_path=?29",
                                 rusqlite::params![
                                     exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
                                     exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
                                     exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
                                     exif.image_width, exif.image_height, exif.color_space,
                                     exif.latitude, exif.longitude, exif.altitude,
+                                    exif.software, exif.copyright, exif.image_description, exif.orientation,
+                                    exif.exposure_program, exif.max_aperture, exif.focal_length_35mm,
+                                    exif.lens_make, exif.scene_capture_type, exif.contrast,
                                     e.path,
                                 ],
                             ).ok();
@@ -702,6 +760,16 @@ pub async fn open_directory(
                                 "latitude": exif.latitude,
                                 "longitude": exif.longitude,
                                 "altitude": exif.altitude,
+                                "software": exif.software,
+                                "copyright": exif.copyright,
+                                "imageDescription": exif.image_description,
+                                "orientation": exif.orientation,
+                                "exposureProgram": exif.exposure_program,
+                                "maxAperture": exif.max_aperture,
+                                "focalLength35mm": exif.focal_length_35mm,
+                                "lensMake": exif.lens_make,
+                                "sceneCaptureType": exif.scene_capture_type,
+                                "contrast": exif.contrast,
                             }));
                             if batch.len() >= 100 {
                                 let _ = app_handle2.emit("exif-updated", &batch);
@@ -747,6 +815,9 @@ pub async fn reload_directory(
                          exposure_comp, flash, white_balance, metering_mode,
                          image_width, image_height, color_space,
                          latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
                          rating, color_label, flag, notes
                   FROM photos
                   WHERE file_path LIKE ?1
@@ -782,10 +853,20 @@ pub async fn reload_directory(
                 latitude: row.get(22)?,
                 longitude: row.get(23)?,
                 altitude: row.get(24)?,
-                rating: row.get(25).unwrap_or(0),
-                color_label: row.get(26)?,
-                flag: row.get(27)?,
-                notes: row.get(28)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
             })
         })
         .map_err(|e| e.to_string())?

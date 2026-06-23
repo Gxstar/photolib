@@ -41,6 +41,16 @@ function normalizePhoto(raw: Record<string, unknown>): Photo {
     latitude: (raw.latitude ?? null) as number | null,
     longitude: (raw.longitude ?? null) as number | null,
     altitude: (raw.altitude ?? null) as number | null,
+    software: (raw.software ?? "") as string || "",
+    copyright: (raw.copyright ?? "") as string || "",
+    imageDescription: (raw.imageDescription ?? raw.image_description ?? "") as string || "",
+    orientation: (raw.orientation ?? 0) as number,
+    exposureProgram: (raw.exposureProgram ?? raw.exposure_program ?? "") as string || "",
+    maxAperture: (raw.maxAperture ?? raw.max_aperture ?? 0) as number,
+    focalLength35mm: (raw.focalLength35mm ?? raw.focal_length_35mm ?? 0) as number,
+    lensMake: (raw.lensMake ?? raw.lens_make ?? "") as string || "",
+    sceneCaptureType: (raw.sceneCaptureType ?? raw.scene_capture_type ?? "") as string || "",
+    contrast: (raw.contrast ?? "") as string || "",
     rating: (raw.rating ?? 0) as number,
     colorLabel: (raw.colorLabel ?? raw.color_label ?? "") as string || "",
     flag: (raw.flag ?? "") as string || "",
@@ -61,7 +71,7 @@ export async function getPhotos(): Promise<Photo[]> {
   return raw.map(normalizePhoto);
 }
 
-/// 获取单张照片的完整 EXIF 元数据（exiftool 实时读取）
+/// 获取单张照片的完整 EXIF 元数据（nom-exif 原生解析）
 export async function getPhotoMetadata(filePath: string): Promise<Record<string, unknown>> {
   const invoke = await getInvoke();
   return invoke<Record<string, unknown>>("get_photo_metadata", { filePath });

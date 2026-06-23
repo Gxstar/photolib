@@ -28,6 +28,18 @@ export interface Photo {
   longitude: number | null;
   altitude: number | null;
 
+  // Extended EXIF
+  software: string;
+  copyright: string;
+  imageDescription: string;
+  orientation: number;
+  exposureProgram: string;
+  maxAperture: number;
+  focalLength35mm: number;
+  lensMake: string;
+  sceneCaptureType: string;
+  contrast: string;
+
   // User data
   rating: number;       // 0-5
   colorLabel: string;   // '' | 'red' | 'blue' | 'green' | 'yellow' | 'purple'

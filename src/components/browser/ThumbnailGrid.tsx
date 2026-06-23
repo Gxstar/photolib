@@ -93,7 +93,7 @@ interface ThumbnailGridProps {
 }
 
 export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
-  const { selectedIds, toggleSelect, thumbnailSize, setThumbnailSize } = useAppStore();
+  const { isLoading, selectedIds, toggleSelect, thumbnailSize, setThumbnailSize } = useAppStore();
 
   // 目录切换时清空旧 pending 请求
   useEffect(() => {
@@ -148,10 +148,19 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
       <div className="flex-1">
         {photos.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-surface-400 animate-fade-in">
-            <div className="w-14 h-14 rounded-2xl bg-surface-100 dark:bg-surface-100 flex items-center justify-center">
-              <ImageOff size={24} strokeWidth={1.5} className="text-surface-300" />
-            </div>
-            <span className="text-xs">此目录没有照片，或尚未扫描</span>
+            {isLoading ? (
+              <>
+                <div className="w-5 h-5 border-2 border-surface-300 border-t-accent-500 rounded-full animate-spin" />
+                <span className="text-xs">扫描文件中...</span>
+              </>
+            ) : (
+              <>
+                <div className="w-14 h-14 rounded-2xl bg-surface-100 dark:bg-surface-100 flex items-center justify-center">
+                  <ImageOff size={24} strokeWidth={1.5} className="text-surface-300" />
+                </div>
+                <span className="text-xs">此目录没有照片</span>
+              </>
+            )}
           </div>
         ) : (
           <VirtuosoGrid

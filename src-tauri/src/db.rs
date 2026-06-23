@@ -50,6 +50,18 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
             longitude       REAL,
             altitude        REAL,
 
+            -- 扩展 EXIF
+            software          TEXT,
+            copyright         TEXT,
+            image_description TEXT,
+            orientation       INTEGER,
+            exposure_program  TEXT,
+            max_aperture      REAL,
+            focal_length_35mm REAL,
+            lens_make         TEXT,
+            scene_capture_type TEXT,
+            contrast          TEXT,
+
             -- 用户数据
             rating          INTEGER DEFAULT 0,
             color_label     TEXT,
@@ -114,8 +126,25 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
         "
     )?;
 
-    // 迁移：为已存在的 DB 添加 exif_attempted 列（SQLite 不报错就成功）
+    // 迁移：为已存在的 DB 添加列（SQLite 不报错就成功）
     conn.execute_batch("ALTER TABLE photos ADD COLUMN exif_attempted INTEGER DEFAULT 0;").ok();
+
+    let new_cols = [
+        "software TEXT",
+        "copyright TEXT",
+        "image_description TEXT",
+        "orientation INTEGER",
+        "exposure_program TEXT",
+        "max_aperture REAL",
+        "focal_length_35mm REAL",
+        "lens_make TEXT",
+        "scene_capture_type TEXT",
+        "contrast TEXT",
+    ];
+    for col in &new_cols {
+        let sql = format!("ALTER TABLE photos ADD COLUMN {col};");
+        conn.execute_batch(&sql).ok();
+    }
 
     Ok(())
 }
