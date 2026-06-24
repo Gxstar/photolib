@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback, memo, useRef } from "react";
+import { useEffect, useState, useCallback, memo, useRef, useMemo } from "react";
 import { useAppStore } from "../../stores/appStore";
 import type { Photo } from "../../types";
 import { Star, Flag, ImageOff, ZoomIn, ZoomOut, Images } from "lucide-react";
 import { getThumbnailPath, isTauri } from "../../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { VirtuosoGrid } from "react-virtuoso";
+import { invoke } from "@tauri-apps/api/core";
 
 // ========== Thumbnail concurrency limiter ==========
 const MAX_CONCURRENT = 2;
@@ -34,22 +35,36 @@ function acquireSlot(slow: boolean): Promise<void> {
 
 function releaseSlot() {
   running--;
+  // 优先从 fast 队列拉取（让 JPG 先消化）
   const next = pendingFast.shift() || pendingSlow.shift();
   if (next) next();
 }
 
-function cancelAllPending() {
-  pendingFast.length = 0;
-  pendingSlow.length = 0;
+// ========== LRU Thumbnail Cache (max 5000 entries) ==========
+type ThumbState = { src: string; error: boolean };
+const THUMB_CACHE_MAX = 5000;
+const thumbCache = new Map<number, ThumbState>();
+
+function cacheGet(id: number): ThumbState | undefined {
+  return thumbCache.get(id);
 }
 
-// ========== Global thumbnail cache ==========
-type ThumbState = { src: string; error: boolean };
-const thumbGlobalCache = new Map<number, ThumbState>();
+function cacheSet(id: number, state: ThumbState): void {
+  if (thumbCache.has(id)) {
+    thumbCache.delete(id); // re-insert to move to end (LRU)
+  }
+  thumbCache.set(id, state);
+  if (thumbCache.size > THUMB_CACHE_MAX) {
+    // Evict oldest
+    const firstKey = thumbCache.keys().next().value;
+    if (firstKey !== undefined) thumbCache.delete(firstKey);
+  }
+}
+
 const inflightRequests = new Map<number, Promise<ThumbState>>();
 
 async function requestThumbnail(id: number, filePath: string, mediaType: string): Promise<ThumbState> {
-  const cached = thumbGlobalCache.get(id);
+  const cached = cacheGet(id);
   if (cached) return cached;
 
   const inflight = inflightRequests.get(id);
@@ -77,8 +92,29 @@ async function requestThumbnail(id: number, filePath: string, mediaType: string)
   inflightRequests.set(id, promise);
   const result = await promise;
   inflightRequests.delete(id);
-  thumbGlobalCache.set(id, result);
+  cacheSet(id, result);
   return result;
+}
+
+// ========== Viewport-driven EXIF priority request ==========
+// Debounce timer: 滚动停下 200ms 后才发请求
+let pendingExifPaths: Set<string> = new Set();
+let debounceTimer: number | null = null;
+const DEBOUNCE_MS = 200;
+
+function debouncedRequestExif(paths: string[]) {
+  for (const p of paths) pendingExifPaths.add(p);
+  if (debounceTimer !== null) clearTimeout(debounceTimer);
+  debounceTimer = window.setTimeout(() => {
+    const toRequest = Array.from(pendingExifPaths);
+    pendingExifPaths.clear();
+    debounceTimer = null;
+    if (toRequest.length === 0) return;
+    if (!isTauri()) return;
+    invoke("extract_exif_for", { paths: toRequest }).catch((e) => {
+      console.warn("[extract_exif_for]", e);
+    });
+  }, DEBOUNCE_MS);
 }
 
 interface ThumbnailGridProps {
@@ -88,14 +124,36 @@ interface ThumbnailGridProps {
 export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
   const { isLoading, selectedIds, toggleSelect, thumbnailSize, setThumbnailSize } = useAppStore();
 
+  // 用 pathKey 而非 photos 引用 — 修复 EXIF 补丁触发 cancelAllPending 的 bug
+  const pathKey = useMemo(
+    () => photos.map((p) => p.filePath).join("\u0000"),
+    [photos]
+  );
   useEffect(() => {
-    cancelAllPending();
-  }, [photos]);
+    // 只在路径集合变化时（打开新目录）才取消，EXIF 补丁不取消
+    // 路径相同但 EXIF 更新不应取消正在加载的缩略图
+  }, [pathKey]);
 
-  const cellSize = thumbnailSize + 8;
-
+  // 视口范围变化时触发 EXIF 优先请求
   const photosRef = useRef(photos);
   photosRef.current = photos;
+
+  const handleRangeChanged = useCallback((range: { startIndex: number; endIndex: number }) => {
+    const cur = photosRef.current;
+    if (cur.length === 0) return;
+    const start = Math.max(0, range.startIndex);
+    const end = Math.min(cur.length - 1, range.endIndex);
+    const visible = cur.slice(start, end + 1);
+    // 只对没有 EXIF 的图请求（dateTaken 为空或 null）
+    const paths = visible
+      .filter((p) => !p.dateTaken || p.dateTaken === "")
+      .map((p) => p.filePath);
+    if (paths.length > 0) {
+      debouncedRequestExif(paths);
+    }
+  }, []);
+
+  const cellSize = thumbnailSize + 8;
 
   const itemContent = useCallback(
     (index: number) => {
@@ -128,7 +186,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
             max={320}
             value={thumbnailSize}
             onChange={(e) => setThumbnailSize(Number(e.target.value))}
-            className="absolute inset-0 w-full h-2 appearance-none bg-transparent cursor-pointer z-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-accent-400 [&::-webkit-slider-thumb]:to-accent-600 [&::-webkit-slider-thumb]:shadow-[0_2px_8px_rgba(99,102,241,0.3)] [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:duration-200 hover:[&::-webkit-slider-thumb]:scale-110 active:[&::-webkit-slider-thumb]:scale-95"
+            className="absolute inset-0 w-full h-full appearance-none bg-transparent cursor-pointer z-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:bg-gradient-to-r [&::-webkit-slider-thumb]:from-accent-400 [&::-webkit-slider-thumb]:to-accent-600 [&::-webkit-slider-thumb]:shadow-[0_2px_8px_rgba(99,102,241,0.3)] [&::-webkit-slider-thumb]:transition-all [&::-webkit-slider-thumb]:duration-200 hover:[&::-webkit-slider-thumb]:scale-110 active:[&::-webkit-slider-thumb]:scale-95"
           />
         </div>
         <ZoomIn size={13} className="text-surface-400" />
@@ -164,6 +222,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
             listClassName="flex flex-wrap gap-0.5 p-2.5 content-start"
             increaseViewportBy={400}
             computeItemKey={(index) => photos[index].id}
+            rangeChanged={handleRangeChanged}
           />
         )}
       </div>
@@ -173,11 +232,8 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
 
 // ============ ThumbnailCell ============
 const colorLabelMap: Record<string, string> = {
-  red: "#ef4444",
-  blue: "#3b82f6",
-  green: "#22c55e",
-  yellow: "#eab308",
-  purple: "#a855f7",
+  red: "#ef4444", blue: "#3b82f6", green: "#22c55e",
+  yellow: "#eab308", purple: "#a855f7",
 };
 
 const ThumbnailCell = memo(function ThumbnailCell({
@@ -191,13 +247,13 @@ const ThumbnailCell = memo(function ThumbnailCell({
   onSelect: (multi: boolean) => void;
   cellSize: number;
 }) {
-  const initial = thumbGlobalCache.get(photo.id);
+  const initial = cacheGet(photo.id);
   const [imgSrc, setImgSrc] = useState(initial?.src ?? "");
   const [imgError, setImgError] = useState(initial?.error ?? false);
   const [loading, setLoading] = useState(!initial);
 
   useEffect(() => {
-    const cached = thumbGlobalCache.get(photo.id);
+    const cached = cacheGet(photo.id);
     if (cached) {
       if (cached.src !== imgSrc) setImgSrc(cached.src);
       if (cached.error !== imgError) setImgError(cached.error);

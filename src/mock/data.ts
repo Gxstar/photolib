@@ -70,6 +70,7 @@ export const mockPhotos: Photo[] = cameras.map((cam, i) => ({
   filePath: `D:/Photos/2026/06/photo_${String(i + 1).padStart(4, "0")}.CR3`,
   fileName: `photo_${String(i + 1).padStart(4, "0")}.CR3`,
   fileSize: (25 + Math.random() * 20) * 1024 * 1024,
+  fileDate: Date.now() - i * 3600 * 1000,
   mediaType: i % 3 === 0 ? "jpeg" : "raw",
   thumbnailUrl: placeholderThumb(colors[i], `${cam.model} · ${lenses[i].split(" ").slice(0, 2).join(" ")}`),
 
@@ -82,7 +83,7 @@ export const mockPhotos: Photo[] = cameras.map((cam, i) => ({
   shutterSpeed: ["1/8000", "1/4000", "1/2000", "1/1000", "1/500", "1/250", "1/125", "1/60", "1/30", "1/15"][i % 10],
   iso: [100, 200, 400, 800, 1600, 3200, 6400, 12800, 25600, 51200][i % 10],
   exposureComp: (i % 5 - 2) * 0.33,
-  flash: i % 5 === 0 ? 1 : 0,
+  flash: i % 5 === 0 ? "闪光灯触发" : "闪光灯未触发",
   whiteBalance: ["Auto", "Daylight", "Cloudy", "Shade", "Tungsten"][i % 5],
   meteringMode: ["Evaluative", "Center-weighted", "Spot"][i % 3],
   imageWidth: 8192,

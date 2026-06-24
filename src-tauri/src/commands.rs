@@ -3,7 +3,6 @@
 use crate::models::Photo;
 use crate::scanner;
 use crate::watchdog::Watchdog;
-use std::collections::HashMap;
 use tauri::{State, Emitter};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -631,10 +630,13 @@ pub async fn debug_list_photos(
     Ok(format!("DB has {} photos. First {} paths: {:?}", count, paths.len(), paths))
 }
 
-/// 打开目录 — 极速返回，后台异步完成 DB 写入 + EXIF 提取
+/// 打开目录 — 极速返回（skeleton），后台异步加载 meta + EXIF
 ///
-/// Priority 1 规格：扫描即返回（跳过 DB），<50ms 前端拿到文件列表
-/// 后台线程：INSERT → COMMIT → 逐文件 EXIF 提取 → 事件推送（免竞态）
+/// 理想流程：
+///   1. Phase 1 (this fn, 同步，~20ms) — read_dir → 返回最小 Photo 列表
+///   2. Phase 2 (后台) — INSERT 到 DB + 读 meta + 查 DB 缓存 EXIF → emit "exif-updated"
+///   3. Phase 3 (后台, exif_pool) — 排程所有 skeleton 到池里做新鲜提取
+///   4. 前端 scroll 时调用 extract_exif_for(visible_paths) → 视口优先
 #[tauri::command]
 pub async fn open_directory(
     folder_path: String,
@@ -647,329 +649,266 @@ pub async fn open_directory(
         return Err(format!("目录不存在: {}", folder_path));
     }
 
-    // ===== Phase 1a: 极速文件列表（仅 read_dir + 扩展名，无元数据 I/O）=====
-    let app2 = app.clone();
-    let dir_fast = folder_path.clone();
-    let path_fast = path.clone();
-    let skeleton_photos = tokio::task::spawn_blocking(move || {
-        let mut skeleton = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&path_fast) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let epath = entry.path();
-                if !epath.is_file() { continue; }
-                if !crate::scanner::is_photo_file(&epath) { continue; }
+    // ===== Phase 1: Skeleton (read_dir only, 目标 < 50ms) =====
+    let skeleton: Vec<Photo> = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            let mut skeleton = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let epath = entry.path();
+                    if !epath.is_file() { continue; }
+                    if !crate::scanner::is_photo_file(&epath) { continue; }
 
-                let name = epath.file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let media_type = crate::scanner::get_media_type(&epath)
-                    .unwrap_or_default();
-                let path_str = epath.to_string_lossy().to_string();
-                let id = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes()) as i64;
+                    let name = epath.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let media_type = crate::scanner::get_media_type(&epath)
+                        .unwrap_or_default();
+                    let path_str = epath.to_string_lossy().to_string();
+                    let id = xxhash_rust::xxh3::xxh3_64(path_str.as_bytes()) as i64;
 
-                skeleton.push(Photo {
-                    id,
-                    file_path: path_str,
-                    file_name: name,
-                    media_type: Some(media_type),
-                    file_size: None, file_hash: None, file_date: None,
-                    thumbnail_url: None,
-                    date_taken: None,
-                    camera_make: None, camera_model: None, lens_model: None,
-                    focal_length: None, aperture: None, shutter_speed: None,
-                    iso: None, exposure_comp: None, flash: None,
-                    white_balance: None, metering_mode: None,
-                    image_width: None, image_height: None, color_space: None,
-                    latitude: None, longitude: None, altitude: None,
-                    software: None, copyright: None, image_description: None,
-                    orientation: None, exposure_program: None,
-                    max_aperture: None, focal_length_35mm: None,
-                    lens_make: None, scene_capture_type: None, contrast: None,
-                    rating: 0, color_label: None, flag: None, notes: None,
+                    skeleton.push(Photo {
+                        id,
+                        file_path: path_str,
+                        file_name: name,
+                        media_type: Some(media_type),
+                        file_size: None, file_hash: None, file_date: None,
+                        thumbnail_url: None,
+                        date_taken: None,
+                        camera_make: None, camera_model: None, lens_model: None,
+                        focal_length: None, aperture: None, shutter_speed: None,
+                        iso: None, exposure_comp: None, flash: None,
+                        white_balance: None, metering_mode: None,
+                        image_width: None, image_height: None, color_space: None,
+                        latitude: None, longitude: None, altitude: None,
+                        software: None, copyright: None, image_description: None,
+                        orientation: None, exposure_program: None,
+                        max_aperture: None, focal_length_35mm: None,
+                        lens_make: None, scene_capture_type: None, contrast: None,
+                        rating: 0, color_label: None, flag: None, notes: None,
+                    });
+                }
+            }
+            skeleton
+        }
+    }).await.map_err(|e| format!("fast scan join error: {}", e))?;
+
+    eprintln!("[PhotoLib::open_directory] Skeleton: {} files (target < 50ms)", skeleton.len());
+
+    // 注册 id 映射给 EXIF pool（worker 需要 file_path → id 来 emit patch）
+    let id_paths: Vec<(String, i64)> = skeleton.iter().map(|p| (p.file_path.clone(), p.id)).collect();
+    crate::exif_pool::pool().register_paths(&id_paths);
+
+    // emit "photos-skeleton" 事件给前端（前端可以用此触发 UI 切换 loading）
+    let _ = app.emit("photos-skeleton", serde_json::json!({
+        "folderPath": &folder_path,
+        "photos": &skeleton,
+    }));
+
+    // ===== Phase 2 + 3: 后台异步处理（不阻塞返回）=====
+    let db_path = db.path.clone();
+    let app_clone = app.clone();
+    let folder = folder_path.clone();
+    let skeleton_for_bg = skeleton.clone();
+    tokio::spawn(async move {
+        if let Err(e) = open_directory_background(db_path, app_clone, folder, skeleton_for_bg).await {
+            eprintln!("[open_directory] background: {:#}", e);
+        }
+    });
+
+    Ok(skeleton)
+}
+
+async fn open_directory_background(
+    db_path: std::path::PathBuf,
+    app: tauri::AppHandle,
+    folder: String,
+    skeleton: Vec<Photo>,
+) -> anyhow::Result<()> {
+    // Step A: INSERT file records（确保 DB 有记录）+ 读 fs::metadata + JPEG 头
+    let db_path_a = db_path.clone();
+    let skeleton_a = skeleton.clone();
+    let result: anyhow::Result<Vec<MetaEntry>> = tokio::task::spawn_blocking(move || {
+        let conn = Connection::open(&db_path_a)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
+
+        conn.execute_batch("BEGIN TRANSACTION;").ok();
+        for photo in &skeleton_a {
+            conn.execute(
+                "INSERT OR IGNORE INTO photos (file_path, file_name, media_type) VALUES (?1, ?2, ?3)",
+                rusqlite::params![photo.file_path, photo.file_name, photo.media_type],
+            ).ok();
+        }
+        conn.execute_batch("COMMIT;").ok();
+
+        // 读 fs::metadata
+        let mut entries = Vec::new();
+        for photo in &skeleton_a {
+            if let Ok(meta) = std::fs::metadata(&photo.file_path) {
+                entries.push(MetaEntry {
+                    path: photo.file_path.clone(),
+                    file_size: meta.len() as i64,
+                    modified: meta.modified().ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0),
                 });
             }
         }
-        skeleton
-    }).await.map_err(|e| format!("fast scan join error: {}", e))?;
-    eprintln!("[PhotoLib::open_directory] Fast scan: {} files", skeleton_photos.len());
+        Ok(entries)
+    }).await.map_err(|e| anyhow::anyhow!("join: {}", e))?;
 
-    let _ = app2.emit("photos-skeleton", serde_json::json!({
-        "folderPath": &dir_fast,
-        "photos": &skeleton_photos,
-    }));
+    let entries = result?;
 
-    // ===== Phase 1b: 加载文件元数据（fs::metadata + JPEG 头）=====
-    let entries = tokio::task::spawn_blocking(move || {
-        crate::scanner::scan_directory_shallow_with_meta(&path)
-    }).await.map_err(|e| format!("scan join error: {}", e))?;
-    eprintln!("[PhotoLib::open_directory] Metadata scan: {} files", entries.len());
-
-    // ===== Phase 2: 从 DB 加载已有 EXIF =====
-    let db_path2 = db.path.clone();
-    let dir2 = folder_path.clone();
-    let db_map: HashMap<String, Photo> = tokio::task::spawn_blocking(move || {
-        let conn = match Connection::open(&db_path2) {
-            Ok(c) => c,
-            Err(_) => return HashMap::new(),
-        };
-        let _ = conn.execute_batch("PRAGMA journal_mode=WAL;");
-        let folder_norm = dir2.trim_end_matches('\\');
-        let prefix = format!("{}\\", folder_norm);
-        let mut stmt = match conn.prepare(
-            "SELECT file_path, date_taken, camera_make, camera_model, lens_model, \
-                    focal_length, aperture, shutter_speed, iso, \
-                    exposure_comp, flash, white_balance, metering_mode, \
-                    image_width, image_height, color_space, \
-                    latitude, longitude, altitude, \
-                    software, copyright, image_description, orientation, \
-                    exposure_program, max_aperture, focal_length_35mm, \
-                    lens_make, scene_capture_type, contrast, \
-                    rating, color_label, flag, notes \
-             FROM photos WHERE file_path LIKE ?1"
-        ) {
-            Ok(s) => s,
-            Err(_) => return HashMap::new(),
-        };
-        let folder = std::path::PathBuf::from(folder_norm);
-        stmt.query_map(rusqlite::params![format!("{}%", prefix)], |row| {
-            Ok((row.get::<_, String>(0)?, Photo {
-                id: 0,
-                file_path: String::new(),
-                file_name: String::new(),
-                file_size: None,
-                file_hash: None,
-                file_date: None,
-                media_type: None,
-                thumbnail_url: None,
-                date_taken: row.get(1)?,
-                camera_make: row.get(2)?,
-                camera_model: row.get(3)?,
-                lens_model: row.get(4)?,
-                focal_length: row.get(5)?,
-                aperture: row.get(6)?,
-                shutter_speed: row.get(7)?,
-                iso: row.get(8)?,
-                exposure_comp: row.get(9)?,
-                flash: row.get(10)?,
-                white_balance: row.get(11)?,
-                metering_mode: row.get(12)?,
-                image_width: row.get(13)?,
-                image_height: row.get(14)?,
-                color_space: row.get(15)?,
-                latitude: row.get(16)?,
-                longitude: row.get(17)?,
-                altitude: row.get(18)?,
-                software: row.get(19)?,
-                copyright: row.get(20)?,
-                image_description: row.get(21)?,
-                orientation: row.get(22)?,
-                exposure_program: row.get(23)?,
-                max_aperture: row.get(24)?,
-                focal_length_35mm: row.get(25)?,
-                lens_make: row.get(26)?,
-                scene_capture_type: row.get(27)?,
-                contrast: row.get(28)?,
-                rating: row.get(29).unwrap_or(0),
-                color_label: row.get(30)?,
-                flag: row.get(31)?,
-                notes: row.get(32)?,
-            }))
-        })
-        .ok()
-        .map(|rows| {
-            rows.filter_map(|r| r.ok())
-                .filter(|(path, _)| {
-                    std::path::Path::new(path)
-                        .parent()
-                        .map(|parent| parent == folder.as_path())
-                        .unwrap_or(false)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-    }).await.unwrap_or_default();
-    eprintln!("[PhotoLib::open_directory] DB EXIF cache: {} entries", db_map.len());
-
-    // 构建 Photo 数组（hash 为 ID，DB 已有 EXIF 直接填充）
-    let photos: Vec<Photo> = entries.iter().map(|e| {
-        let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
-        let db = db_map.get(&e.path);
-        Photo {
-            id,
-            file_path: e.path.clone(),
-            file_name: e.name.clone(),
-            file_size: Some(e.size),
-            file_hash: None,
-            file_date: Some(e.modified),
-            media_type: Some(e.media_type.clone()),
-            thumbnail_url: None,
-            date_taken: db.and_then(|p| p.date_taken.clone()),
-            camera_make: db.and_then(|p| p.camera_make.clone()),
-            camera_model: db.and_then(|p| p.camera_model.clone()),
-            lens_model: db.and_then(|p| p.lens_model.clone()),
-            focal_length: db.and_then(|p| p.focal_length),
-            aperture: db.and_then(|p| p.aperture),
-            shutter_speed: db.and_then(|p| p.shutter_speed.clone()),
-            iso: db.and_then(|p| p.iso),
-            exposure_comp: db.and_then(|p| p.exposure_comp),
-            flash: db.and_then(|p| p.flash),
-            white_balance: db.and_then(|p| p.white_balance.clone()),
-            metering_mode: db.and_then(|p| p.metering_mode.clone()),
-            image_width: db.and_then(|p| p.image_width).or(e.width.map(|w| w as i64)),
-            image_height: db.and_then(|p| p.image_height).or(e.height.map(|h| h as i64)),
-            color_space: db.and_then(|p| p.color_space.clone()),
-            latitude: db.and_then(|p| p.latitude),
-            longitude: db.and_then(|p| p.longitude),
-            altitude: db.and_then(|p| p.altitude),
-            software: db.and_then(|p| p.software.clone()),
-            copyright: db.and_then(|p| p.copyright.clone()),
-            image_description: db.and_then(|p| p.image_description.clone()),
-            orientation: db.and_then(|p| p.orientation),
-            exposure_program: db.and_then(|p| p.exposure_program.clone()),
-            max_aperture: db.and_then(|p| p.max_aperture),
-            focal_length_35mm: db.and_then(|p| p.focal_length_35mm),
-            lens_make: db.and_then(|p| p.lens_make.clone()),
-            scene_capture_type: db.and_then(|p| p.scene_capture_type.clone()),
-            contrast: db.and_then(|p| p.contrast.clone()),
-            rating: db.map(|p| p.rating).unwrap_or(0),
-            color_label: db.and_then(|p| p.color_label.clone()),
-            flag: db.and_then(|p| p.flag.clone()),
-            notes: db.and_then(|p| p.notes.clone()),
-        }
-    }).collect();
-    eprintln!("[PhotoLib::open_directory] Returning {} photos (instant)", photos.len());
-
-    // ===== Phase 3 (background): INSERT + EXIF 一体化 =====
-    let db_path = db.path.clone();
-    let dir_path = folder_path.clone();
-    let app_handle = app.clone();
-    tokio::spawn(async move {
-        // — Step A: INSERT file records（SQLite 操作本来就是同步阻塞的） —
-        if let Ok(conn) = Connection::open(&db_path) {
+    // UPDATE file_size + file_date
+    let db_path_for_update = db_path.clone();
+    let entries_for_update = entries.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Ok(conn) = Connection::open(&db_path_for_update) {
             conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
             conn.execute_batch("BEGIN TRANSACTION;").ok();
-            for e in &entries {
+            for e in &entries_for_update {
                 conn.execute(
-                    "INSERT OR IGNORE INTO photos (file_path, file_name, file_size, file_date, media_type, image_width, image_height)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![e.path, e.name, e.size, e.modified, e.media_type, e.width, e.height],
+                    "UPDATE photos SET file_size=?1, file_date=?2 WHERE file_path=?3",
+                    rusqlite::params![e.file_size, e.modified, e.path],
                 ).ok();
             }
             conn.execute_batch("COMMIT;").ok();
-            eprintln!("[PhotoLib::open_directory] DB INSERT: {} files → {:?}", entries.len(), dir_path);
         }
+    }).await;
 
-        // — Step B: EXIF extraction + event push —
-        // 包进 spawn_blocking 释放 tokio worker 线程，让缩略图 IPC 不排队
-        let db_path2 = db_path.clone();
-        let app_handle2 = app_handle.clone();
-        let dir_path2 = dir_path.clone();
-        let entries2 = entries.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(conn) = Connection::open(&db_path2) {
-                conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
-                let mut batch: Vec<serde_json::Value> = Vec::with_capacity(100);
-                let mut skipped = 0usize;
-                for e in &entries2 {
-                    let attempted: Option<i32> = conn
-                        .query_row(
-                            "SELECT exif_attempted FROM photos WHERE file_path=?1",
-                            rusqlite::params![e.path],
-                            |row| row.get(0),
-                        )
-                        .ok();
-                    if attempted == Some(1) {
-                        skipped += 1;
-                        continue;
-                    }
-                    let fp = std::path::Path::new(&e.path);
-                    match crate::metadata::extract_exif(fp) {
-                        Ok(exif) => {
-                            conn.execute(
-                                "UPDATE photos SET
-                                    date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
-                                    focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
-                                    exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
-                                    image_width=?13, image_height=?14, color_space=?15,
-                                    latitude=?16, longitude=?17, altitude=?18,
-                                    software=?19, copyright=?20, image_description=?21, orientation=?22,
-                                    exposure_program=?23, max_aperture=?24, focal_length_35mm=?25,
-                                    lens_make=?26, scene_capture_type=?27, contrast=?28,
-                                    exif_attempted=1
-                                 WHERE file_path=?29",
-                                rusqlite::params![
-                                    exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
-                                    exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
-                                    exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
-                                    exif.image_width, exif.image_height, exif.color_space,
-                                    exif.latitude, exif.longitude, exif.altitude,
-                                    exif.software, exif.copyright, exif.image_description, exif.orientation,
-                                    exif.exposure_program, exif.max_aperture, exif.focal_length_35mm,
-                                    exif.lens_make, exif.scene_capture_type, exif.contrast,
-                                    e.path,
-                                ],
-                            ).ok();
+    // emit "meta-loaded" 事件（file_size + file_date）
+    if !entries.is_empty() {
+        let meta_patches: Vec<serde_json::Value> = entries.iter().map(|e| {
+            let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
+            serde_json::json!({
+                "id": id,
+                "filePath": e.path,
+                "fileSize": e.file_size,
+                "fileDate": e.modified,
+            })
+        }).collect();
+        let _ = app.emit("meta-loaded", &meta_patches);
+    }
 
-                            let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
-                            batch.push(serde_json::json!({
-                                "id": id, "filePath": e.path,
-                                "dateTaken": exif.date_taken,
-                                "cameraMake": exif.camera_make,
-                                "cameraModel": exif.camera_model,
-                                "lensModel": exif.lens_model,
-                                "focalLength": exif.focal_length,
-                                "aperture": exif.aperture,
-                                "shutterSpeed": exif.shutter_speed,
-                                "iso": exif.iso,
-                                "exposureComp": exif.exposure_comp,
-                                "flash": exif.flash,
-                                "whiteBalance": exif.white_balance,
-                                "meteringMode": exif.metering_mode,
-                                "imageWidth": exif.image_width,
-                                "imageHeight": exif.image_height,
-                                "colorSpace": exif.color_space,
-                                "latitude": exif.latitude,
-                                "longitude": exif.longitude,
-                                "altitude": exif.altitude,
-                                "software": exif.software,
-                                "copyright": exif.copyright,
-                                "imageDescription": exif.image_description,
-                                "orientation": exif.orientation,
-                                "exposureProgram": exif.exposure_program,
-                                "maxAperture": exif.max_aperture,
-                                "focalLength35mm": exif.focal_length_35mm,
-                                "lensMake": exif.lens_make,
-                                "sceneCaptureType": exif.scene_capture_type,
-                                "contrast": exif.contrast,
-                            }));
-                            if batch.len() >= 100 {
-                                let _ = app_handle2.emit("exif-updated", &batch);
-                                batch.clear();
-                            }
-                        }
-                        Err(err) => {
-                            conn.execute(
-                                "UPDATE photos SET exif_attempted=1 WHERE file_path=?1",
-                                rusqlite::params![e.path],
-                            ).ok();
-                            eprintln!("[PhotoLib::open_directory] EXIF skip {}: {:#}", e.path, err);
-                        }
-                    }
-                }
-                if !batch.is_empty() {
-                    let _ = app_handle2.emit("exif-updated", &batch);
-                }
-                eprintln!("[PhotoLib::open_directory] EXIF done: {} new, {} skipped / {} total for {:?}",
-                    entries2.len().saturating_sub(skipped), skipped, entries2.len(), dir_path2);
+    // Step B: 查 DB 缓存的 EXIF → emit "exif-updated" events（分批）
+    let folder_for_query = folder.clone();
+    let cached: Vec<serde_json::Value> = tokio::task::spawn_blocking(move || -> Vec<serde_json::Value> {
+        let conn = match Connection::open(crate::db::get_db_path()) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let _ = conn.execute_batch("PRAGMA journal_mode=WAL;");
+        let folder_norm = folder_for_query.trim_end_matches('\\');
+        let prefix = format!("{}\\", folder_norm);
+        let mut stmt = match conn.prepare(
+            "SELECT id, file_path, date_taken, camera_make, camera_model, lens_model,
+                    focal_length, aperture, shutter_speed, iso,
+                    exposure_comp, flash, white_balance, metering_mode,
+                    image_width, image_height, color_space,
+                    latitude, longitude, altitude,
+                    software, copyright, image_description, orientation,
+                    exposure_program, max_aperture, focal_length_35mm,
+                    lens_make, scene_capture_type, contrast
+             FROM photos WHERE file_path LIKE ?1
+             AND (date_taken IS NOT NULL OR exif_attempted=1)"
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let mut patches = Vec::new();
+        let folder = std::path::PathBuf::from(folder_norm);
+        if let Ok(rows) = stmt.query_map(rusqlite::params![format!("{}%", prefix)], |row| {
+            let file_path: String = row.get(1)?;
+            let parent_match = std::path::Path::new(&file_path)
+                .parent()
+                .map(|p| p == folder.as_path())
+                .unwrap_or(false);
+            if !parent_match {
+                return Ok(None);
             }
-        }).await.unwrap_or_default();
-    });
+            Ok(Some(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "filePath": file_path,
+                "dateTaken": row.get::<_, Option<String>>(2)?,
+                "cameraMake": row.get::<_, Option<String>>(3)?,
+                "cameraModel": row.get::<_, Option<String>>(4)?,
+                "lensModel": row.get::<_, Option<String>>(5)?,
+                "focalLength": row.get::<_, Option<f64>>(6)?,
+                "aperture": row.get::<_, Option<f64>>(7)?,
+                "shutterSpeed": row.get::<_, Option<String>>(8)?,
+                "iso": row.get::<_, Option<i64>>(9)?,
+                "exposureComp": row.get::<_, Option<f64>>(10)?,
+                "flash": row.get::<_, Option<String>>(11)?,
+                "whiteBalance": row.get::<_, Option<String>>(12)?,
+                "meteringMode": row.get::<_, Option<String>>(13)?,
+                "imageWidth": row.get::<_, Option<i64>>(14)?,
+                "imageHeight": row.get::<_, Option<i64>>(15)?,
+                "colorSpace": row.get::<_, Option<String>>(16)?,
+                "latitude": row.get::<_, Option<f64>>(17)?,
+                "longitude": row.get::<_, Option<f64>>(18)?,
+                "altitude": row.get::<_, Option<f64>>(19)?,
+                "software": row.get::<_, Option<String>>(20)?,
+                "copyright": row.get::<_, Option<String>>(21)?,
+                "imageDescription": row.get::<_, Option<String>>(22)?,
+                "orientation": row.get::<_, Option<i64>>(23)?,
+                "exposureProgram": row.get::<_, Option<String>>(24)?,
+                "maxAperture": row.get::<_, Option<f64>>(25)?,
+                "focalLength35mm": row.get::<_, Option<f64>>(26)?,
+                "lensMake": row.get::<_, Option<String>>(27)?,
+                "sceneCaptureType": row.get::<_, Option<String>>(28)?,
+                "contrast": row.get::<_, Option<String>>(29)?,
+            })))
+        }) {
+            for r in rows.flatten() {
+                if let Some(v) = r {
+                    patches.push(v);
+                }
+            }
+        }
+        patches
+    }).await.unwrap_or_default();
 
-    Ok(photos)
+    if !cached.is_empty() {
+        // 分批 emit（每批 20 条）
+        for chunk in cached.chunks(20) {
+            let _ = app.emit("exif-updated", chunk);
+        }
+    }
+
+    // Step C: 把所有 skeleton 路径排程到 exif_pool（后台新鲜提取，JPG 优先）
+    let mut paths: Vec<String> = skeleton.iter().map(|p| p.file_path.clone()).collect();
+    crate::exif_pool::sort_jpg_first(&mut paths);
+    crate::exif_pool::pool().enqueue_background(paths);
+
+    Ok(())
+}
+
+#[derive(Clone)]
+struct MetaEntry {
+    path: String,
+    file_size: i64,
+    modified: i64,
+}
+
+/// 视口优先 EXIF 提取 — 前端 scroll 到新区域时调用
+///
+/// 内部走 exif_pool 的优先队列，worker 完成时 emit "exif-updated" 事件
+/// 此命令返回 session id，前端可记录并在所有 path 都有结果后做后续处理
+#[tauri::command]
+pub async fn extract_exif_for(paths: Vec<String>) -> Result<u64, String> {
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    let mut sorted = paths;
+    crate::exif_pool::sort_jpg_first(&mut sorted);
+    let session = crate::exif_pool::pool().prioritize(sorted);
+    Ok(session)
 }
 
 /// 从 DB 重新加载目录照片（含完整 EXIF）
-/// extract_exif_batch 完成后调用此命令刷新数据
+/// 由前端在 `extract_exif_for` 处理完后调用，刷新数据
 #[tauri::command]
 pub async fn reload_directory(
     folder_path: String,
@@ -1045,7 +984,6 @@ pub async fn reload_directory(
         .filter_map(|r| r.ok())
         .collect();
 
-    // 过滤：只保留直接父目录匹配的照片（不包含子目录）
     let folder = std::path::PathBuf::from(folder_norm);
     let photos: Vec<Photo> = candidates.into_iter()
         .filter(|p| {
@@ -1056,136 +994,7 @@ pub async fn reload_directory(
         })
         .collect();
 
-    eprintln!("[PhotoLib::reload_directory] {} photos from DB (shallow)", photos.len());
     Ok(photos)
-}
-
-/// 提取目录照片的 EXIF（手动重处理，直接扫描文件系统）
-///
-/// 用途：手动修复已存在目录中缺失的 EXIF（如首次打开时竞态导致未处理）
-/// 行为：扫描文件系统 → INSERT OR IGNORE 确保记录 → 跳过 exif_attempted=1 → 提取 + event
-/// 不再依赖 DB 中是否有记录（消除和 open_directory 后台 INSERT 的竞态）
-#[tauri::command]
-pub async fn extract_exif_batch(
-    folder_path: String,
-    db: State<'_, crate::db::AppDatabase>,
-    app: tauri::AppHandle,
-) -> Result<usize, String> {
-    use std::path::Path;
-    eprintln!("[PhotoLib::extract_exif_batch] Start: {:?}", folder_path);
-
-    let dir = Path::new(&folder_path);
-    if !dir.exists() || !dir.is_dir() {
-        return Err("目录不存在".to_string());
-    }
-
-    // 直接扫描文件系统（不依赖 DB）
-    let files = crate::scanner::scan_directory_shallow(dir);
-    eprintln!("[PhotoLib::extract_exif_batch] Found {} files on disk", files.len());
-
-    let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
-
-    // 确保所有文件在 DB 中有行
-    conn.execute_batch("BEGIN TRANSACTION;").ok();
-    for f in &files {
-        let fp = Path::new(f);
-        let name = fp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let media = crate::scanner::get_media_type(fp);
-        let size = std::fs::metadata(fp).ok().map(|m| m.len() as i64);
-        conn.execute(
-            "INSERT OR IGNORE INTO photos (file_path, file_name, file_size, media_type)
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![f, name, size, media],
-        ).ok();
-    }
-    conn.execute_batch("COMMIT;").ok();
-
-    // 提取 EXIF（跳过 exif_attempted=1）
-    let mut updated = 0usize;
-    let mut skipped = 0usize;
-    let mut batch: Vec<serde_json::Value> = Vec::with_capacity(100);
-
-    for f in &files {
-        // 跳过已尝试过的文件
-        let attempted: Option<i32> = conn
-            .query_row(
-                "SELECT exif_attempted FROM photos WHERE file_path=?1",
-                rusqlite::params![f],
-                |row| row.get(0),
-            )
-            .ok();
-        if attempted == Some(1) {
-            skipped += 1;
-            continue;
-        }
-
-        let fp = Path::new(f);
-        match crate::metadata::extract_exif(fp) {
-            Ok(exif) => {
-                conn.execute(
-                    "UPDATE photos SET
-                        date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
-                        focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
-                        exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
-                        image_width=?13, image_height=?14, color_space=?15,
-                        latitude=?16, longitude=?17, altitude=?18,
-                        exif_attempted=1
-                     WHERE file_path=?19",
-                    rusqlite::params![
-                        exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
-                        exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
-                        exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
-                        exif.image_width, exif.image_height, exif.color_space,
-                        exif.latitude, exif.longitude, exif.altitude,
-                        f,
-                    ],
-                ).ok();
-                updated += 1;
-
-                let id = xxhash_rust::xxh3::xxh3_64(f.as_bytes()) as i64;
-                batch.push(serde_json::json!({
-                    "id": id, "filePath": f,
-                    "dateTaken": exif.date_taken,
-                    "cameraMake": exif.camera_make,
-                    "cameraModel": exif.camera_model,
-                    "lensModel": exif.lens_model,
-                    "focalLength": exif.focal_length,
-                    "aperture": exif.aperture,
-                    "shutterSpeed": exif.shutter_speed,
-                    "iso": exif.iso,
-                    "exposureComp": exif.exposure_comp,
-                    "flash": exif.flash,
-                    "whiteBalance": exif.white_balance,
-                    "meteringMode": exif.metering_mode,
-                    "imageWidth": exif.image_width,
-                    "imageHeight": exif.image_height,
-                    "colorSpace": exif.color_space,
-                    "latitude": exif.latitude,
-                    "longitude": exif.longitude,
-                    "altitude": exif.altitude,
-                }));
-                if batch.len() >= 100 {
-                    let _ = app.emit("exif-updated", &batch);
-                    batch.clear();
-                }
-            }
-            Err(err) => {
-                conn.execute(
-                    "UPDATE photos SET exif_attempted=1 WHERE file_path=?1",
-                    rusqlite::params![f],
-                ).ok();
-                eprintln!("[PhotoLib::extract_exif_batch] FAIL {}: {:#}", f, err);
-            }
-        }
-    }
-    if !batch.is_empty() {
-        let _ = app.emit("exif-updated", &batch);
-    }
-
-    eprintln!("[PhotoLib::extract_exif_batch] Done: {} updated, {} skipped / {} total",
-              updated, skipped, files.len());
-    Ok(updated)
 }
 
 /// 获取照片缩略图磁盘缓存路径（用于前端 convertFileSrc 加载）

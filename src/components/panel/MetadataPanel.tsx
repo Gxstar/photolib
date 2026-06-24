@@ -123,7 +123,7 @@ export function MetadataPanel() {
           <div className="grid grid-cols-3 gap-y-3 gap-x-2">
             <GridCell label="ISO" value={`${photo.iso || "—"}`} />
             <GridCell label="光圈" value={photo.aperture ? `f/${photo.aperture}` : "—"} />
-            <GridCell label="曝光补偿" value={photo.exposureComp ? `${photo.exposureComp > 0 ? "+" : ""}${photo.exposureComp} EV` : "—"} />
+            <GridCell label="曝光补偿" value={photo.exposureComp ? `${photo.exposureComp > 0 ? "+" : ""}${photo.exposureComp.toFixed(2)} EV` : "—"} />
             <GridCell label="快门" value={photo.shutterSpeed || "—"} />
             <GridCell label="焦距" value={photo.focalLength ? `${photo.focalLength}mm` : "—"} />
             <GridCell label="测光模式" value={photo.meteringMode || "—"} />
@@ -169,7 +169,10 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
     <div className="flex items-center gap-2">
       <span className="shrink-0 w-5 flex justify-center">{icon}</span>
       <span className="text-2xs text-surface-400 shrink-0 w-10">{label}</span>
-      <span className="flex-1 text-right text-xs font-medium text-surface-700 dark:text-surface-300 truncate">
+      <span
+        title={value}
+        className="flex-1 text-right text-xs font-medium text-surface-700 dark:text-surface-300 truncate"
+      >
         {value}
       </span>
     </div>
@@ -178,16 +181,27 @@ function InfoRow({ icon, label, value }: { icon: React.ReactNode; label: string;
 
 function GridCell({ label, value }: { label: string; value: string }) {
   return (
-    <div className="text-center">
+    <div className="text-center" title={`${label}: ${value}`}>
       <div className="text-2xs text-surface-400 mb-0.5">{label}</div>
-      <div className="text-sm font-semibold text-surface-800 dark:text-surface-200">{value}</div>
+      <div className="text-sm font-semibold text-surface-800 dark:text-surface-200 truncate">{value}</div>
     </div>
   );
 }
 
 function MoreSection({ photo }: { photo: Photo }) {
   const [open, setOpen] = useState(false);
-  const hasMore = photo.focalLength35mm || photo.maxAperture || photo.flash || photo.whiteBalance || photo.exposureProgram || photo.sceneCaptureType || photo.contrast || photo.software || photo.copyright || photo.notes;
+  const hasMore =
+    photo.focalLength35mm ||
+    photo.maxAperture ||
+    photo.flash ||
+    photo.whiteBalance ||
+    photo.meteringMode ||
+    photo.exposureProgram ||
+    photo.sceneCaptureType ||
+    photo.contrast ||
+    photo.software ||
+    photo.copyright ||
+    photo.notes;
 
   if (!hasMore) return null;
 
@@ -203,17 +217,17 @@ function MoreSection({ photo }: { photo: Photo }) {
       </button>
       {open && (
         <div className="px-2.5 pb-2.5 pt-1 space-y-1">
-          {photo.focalLength35mm && <MetaRow label="35mm焦距" value={`${photo.focalLength35mm}mm`} />}
-          {photo.maxAperture && <MetaRow label="最大光圈" value={`f/${photo.maxAperture}`} />}
-          {photo.exposureProgram && <MetaRow label="曝光程序" value={photo.exposureProgram} />}
-          {photo.whiteBalance && <MetaRow label="白平衡" value={photo.whiteBalance} />}
-          {photo.meteringMode && <MetaRow label="测光模式" value={photo.meteringMode} />}
-          {photo.flash !== undefined && <MetaRow label="闪光灯" value={photo.flash ? "开启" : "关闭"} />}
-          {photo.sceneCaptureType && <MetaRow label="场景" value={photo.sceneCaptureType} />}
-          {photo.contrast && <MetaRow label="对比度" value={photo.contrast} />}
-          {photo.software && <MetaRow label="软件" value={photo.software} />}
-          {photo.copyright && <MetaRow label="版权" value={photo.copyright} />}
-          {photo.notes && <MetaRow label="备注" value={photo.notes} />}
+          {photo.focalLength35mm ? <MetaRow label="35mm焦距" value={`${photo.focalLength35mm}mm`} /> : null}
+          {photo.maxAperture ? <MetaRow label="最大光圈" value={`f/${photo.maxAperture}`} /> : null}
+          {photo.exposureProgram ? <MetaRow label="曝光程序" value={photo.exposureProgram} /> : null}
+          {photo.whiteBalance ? <MetaRow label="白平衡" value={photo.whiteBalance} /> : null}
+          {photo.meteringMode ? <MetaRow label="测光模式" value={photo.meteringMode} /> : null}
+          {photo.flash ? <MetaRow label="闪光灯" value={photo.flash} /> : null}
+          {photo.sceneCaptureType ? <MetaRow label="场景" value={photo.sceneCaptureType} /> : null}
+          {photo.contrast ? <MetaRow label="对比度" value={photo.contrast} /> : null}
+          {photo.software ? <MetaRow label="软件" value={photo.software} /> : null}
+          {photo.copyright ? <MetaRow label="版权" value={photo.copyright} /> : null}
+          {photo.notes ? <MetaRow label="备注" value={photo.notes} /> : null}
         </div>
       )}
     </div>
@@ -224,7 +238,12 @@ function MetaRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="text-surface-400 shrink-0 w-14 text-2xs">{label}</span>
-      <span className="text-surface-700 dark:text-surface-300 font-medium truncate">{value}</span>
+      <span
+        title={`${label}: ${value}`}
+        className="text-surface-700 dark:text-surface-300 font-medium truncate"
+      >
+        {value}
+      </span>
     </div>
   );
 }

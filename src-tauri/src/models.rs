@@ -39,7 +39,7 @@ pub struct Photo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exposure_comp: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub flash: Option<i64>,
+    pub flash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub white_balance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

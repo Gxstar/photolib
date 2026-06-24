@@ -21,6 +21,7 @@ export function normalizePhoto(raw: Record<string, unknown>): Photo {
     filePath: (raw.filePath ?? raw.file_path ?? "") as string,
     fileName: (raw.fileName ?? raw.file_name ?? "") as string,
     fileSize: (raw.fileSize ?? raw.file_size ?? 0) as number,
+    fileDate: (raw.fileDate ?? raw.file_date ?? 0) as number,
     mediaType: (raw.mediaType ?? raw.media_type ?? "") as string,
     thumbnailUrl: (raw.thumbnailUrl ?? raw.thumbnail_url ?? "") as string || "",
     dateTaken: (raw.dateTaken ?? raw.date_taken ?? "") as string || "",
@@ -32,7 +33,7 @@ export function normalizePhoto(raw: Record<string, unknown>): Photo {
     shutterSpeed: (raw.shutterSpeed ?? raw.shutter_speed ?? "") as string || "",
     iso: (raw.iso ?? 0) as number,
     exposureComp: (raw.exposureComp ?? raw.exposure_comp ?? 0) as number,
-    flash: (raw.flash ?? 0) as number,
+    flash: (raw.flash ?? "") as string,
     whiteBalance: (raw.whiteBalance ?? raw.white_balance ?? "") as string || "",
     meteringMode: (raw.meteringMode ?? raw.metering_mode ?? "") as string || "",
     imageWidth: (raw.imageWidth ?? raw.image_width ?? 0) as number,
@@ -181,10 +182,11 @@ export async function getThumbnailPath(filePath: string): Promise<string> {
   return invoke<string>("get_thumbnail_path", { filePath });
 }
 
-/// 批量提取 EXIF（后台调用，不阻塞 UI）
-export async function extractExifBatch(folderPath: string): Promise<number> {
+/// 视口优先 EXIF 提取 — 前端 scroll 时调用
+/// 内部走 exif_pool 优先队列，worker 完成时 emit "exif-updated" 事件
+export async function extractExifFor(paths: string[]): Promise<number> {
   const invoke = await getInvoke();
-  return invoke<number>("extract_exif_batch", { folderPath });
+  return invoke<number>("extract_exif_for", { paths });
 }
 
 /// 预加载目录内所有缩略图到磁盘缓存（后台调用，不阻塞 UI）

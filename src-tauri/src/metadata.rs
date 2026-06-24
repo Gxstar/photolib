@@ -1,8 +1,8 @@
 use std::path::Path;
 use serde::Serialize;
-use nom_exif::{MediaParser, MediaSource, Exif, ExifTag};
+use nom_exif::{MediaParser, MediaSource, Exif, ExifTag, ExifDateTime};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ExifFields {
     pub date_taken: Option<String>,
     pub camera_make: Option<String>,
@@ -13,7 +13,7 @@ pub struct ExifFields {
     pub shutter_speed: Option<String>,
     pub iso: Option<i64>,
     pub exposure_comp: Option<f64>,
-    pub flash: Option<i64>,
+    pub flash: Option<String>,
     pub white_balance: Option<String>,
     pub metering_mode: Option<String>,
     pub image_width: Option<i64>,
@@ -55,20 +55,20 @@ fn read_image_dimensions(file_path: &Path) -> (Option<i64>, Option<i64>) {
 fn fields_from_exif(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields> {
     let (dim_w, dim_h) = read_image_dimensions(file_path);
     Ok(ExifFields {
-        date_taken: get_str(exif, ExifTag::DateTimeOriginal)
-            .or_else(|| get_str(exif, ExifTag::CreateDate))
-            .or_else(|| get_str(exif, ExifTag::ModifyDate)),
+        date_taken: get_datetime_str(exif, ExifTag::DateTimeOriginal)
+            .or_else(|| get_datetime_str(exif, ExifTag::CreateDate))
+            .or_else(|| get_datetime_str(exif, ExifTag::ModifyDate)),
         camera_make: get_str(exif, ExifTag::Make),
         camera_model: get_str(exif, ExifTag::Model),
         lens_model: get_str(exif, ExifTag::LensModel),
         focal_length: get_num(exif, ExifTag::FocalLength),
         aperture: get_num(exif, ExifTag::FNumber)
-            .or_else(|| get_num(exif, ExifTag::ApertureValue)),
+            .or_else(|| apex_to_fnumber(get_num(exif, ExifTag::ApertureValue))),
         shutter_speed: format_shutter(get_num(exif, ExifTag::ExposureTime))
             .or_else(|| format_shutter_apex(get_num(exif, ExifTag::ShutterSpeedValue))),
         iso: get_int(exif, ExifTag::ISOSpeedRatings),
         exposure_comp: get_num(exif, ExifTag::ExposureBiasValue),
-        flash: get_int(exif, ExifTag::Flash),
+        flash: map_flash(get_int(exif, ExifTag::Flash)),
         white_balance: map_white_balance(get_uint(exif, ExifTag::WhiteBalanceMode)),
         metering_mode: map_metering_mode(get_uint(exif, ExifTag::MeteringMode)),
         image_width: get_uint(exif, ExifTag::ExifImageWidth)
@@ -90,7 +90,7 @@ fn fields_from_exif(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields>
         image_description: get_str(exif, ExifTag::ImageDescription),
         orientation: get_int(exif, ExifTag::Orientation),
         exposure_program: map_exposure_program(get_uint(exif, ExifTag::ExposureProgram)),
-        max_aperture: get_num(exif, ExifTag::MaxApertureValue),
+        max_aperture: apex_to_fnumber(get_num(exif, ExifTag::MaxApertureValue)),
         focal_length_35mm: get_num(exif, ExifTag::FocalLengthIn35mmFilm),
         lens_make: get_str(exif, ExifTag::LensMake),
         scene_capture_type: map_scene_capture_type(get_uint(exif, ExifTag::SceneCaptureType)),
@@ -129,7 +129,44 @@ fn get_int(exif: &Exif, tag: ExifTag) -> Option<i64> {
 }
 
 fn get_uint(exif: &Exif, tag: ExifTag) -> Option<u32> {
-    exif.get(tag).and_then(|v| v.as_u32())
+    exif.get(tag)
+        .and_then(|v| v.try_as_integer())
+        .and_then(|v| u32::try_from(v).ok())
+}
+
+fn get_datetime_str(exif: &Exif, tag: ExifTag) -> Option<String> {
+    exif.get(tag).and_then(|v| v.as_datetime()).map(|dt| match dt {
+        ExifDateTime::Aware(dt) => dt.format("%Y-%m-%d %H:%M:%S %z").to_string(),
+        ExifDateTime::Naive(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+    })
+}
+
+fn apex_to_fnumber(apex: Option<f64>) -> Option<f64> {
+    apex.map(|v| (2.0_f64).powf(v / 2.0))
+}
+
+fn map_flash(val: Option<i64>) -> Option<String> {
+    Some(match val? {
+        v if v & 0b0000_0001 == 0 => "闪光灯未触发".to_string(),
+        v => {
+            let mut parts = vec!["闪光灯触发".to_string()];
+            match (v >> 1) & 0b11 {
+                0 => parts.push("回光检测未知".to_string()),
+                2 => parts.push("回光未检测到".to_string()),
+                3 => parts.push("回光已检测".to_string()),
+                _ => {}
+            }
+            match (v >> 3) & 0b11 {
+                1 => parts.push("强制闪光".to_string()),
+                2 => parts.push("强制关闭".to_string()),
+                3 => parts.push("自动闪光".to_string()),
+                _ => {}
+            }
+            if (v >> 5) & 0b1 == 1 { parts.push("无闪光功能".to_string()); }
+            if (v >> 6) & 0b1 == 1 { parts.push("防红眼".to_string()); }
+            parts.join(" / ")
+        }
+    })
 }
 
 fn format_shutter(val: Option<f64>) -> Option<String> {

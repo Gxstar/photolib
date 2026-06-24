@@ -18,21 +18,28 @@ pub enum ThumbLevel { L1, L2 }
 
 pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Vec<u8>> {
     let (tl, q) = match level { ThumbLevel::L1 => (480u32, 70u8), ThumbLevel::L2 => (1920u32, 85u8) };
-    if let Ok(d) = try_embedded_thumbnail(source, tl, q) { return Ok(d); }
-    if let Ok(d) = try_raw_tiff_thumbnail(source, tl, q) { return Ok(d); }
-    if let Ok(d) = try_jpeg_scan_thumbnail(source, tl, q) { return Ok(d); }
+
+    // 预读 2MB 文件头，所有路径共享，避免 RAW 文件重复 I/O
+    if let Ok(head) = read_file_head(source) {
+        if let Some(j) = extract_exif_thumbnail_jpeg(&head) {
+            if let Ok(d) = decode_resize_encode(j, tl, q) { return Ok(d); }
+        }
+        if is_tiff_magic(&head[..head.len().min(4)]) {
+            if let Ok(d) = try_standard_tiff_thumbnail(&head, tl, q) { return Ok(d); }
+            if let Ok(d) = try_rw2_blob_thumbnail(&head, tl, q) { return Ok(d); }
+        }
+        if head.len() >= 12 && &head[4..8] == b"ftyp" {
+            if let Some(j) = scan_jpeg_in_file(&head, 0, 512*1024) {
+                return decode_resize_encode(j, tl, q);
+            }
+        }
+    }
+
     if let Ok(d) = try_wic_api_thumbnail(source, tl, q) { return Ok(d); }
     Err(anyhow::anyhow!("unsupported: {:?}", source))
 }
 
 // ===================== 1/4 JPEG EXIF =====================
-
-fn try_embedded_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
-    // 嵌入的 EXIF 缩略图（含 APP1 段）通常在文件前 256KB 内
-    let d = read_file_head(source)?;
-    let j = extract_exif_thumbnail_jpeg(&d).ok_or_else(|| anyhow::anyhow!("no EXIF thumb"))?;
-    decode_resize_encode(j, tl, q)
-}
 
 fn extract_exif_thumbnail_jpeg(d: &[u8]) -> Option<&[u8]> {
     if d.len() < 4 || d[0] != 0xFF || d[1] != 0xD8 { return None; }
@@ -64,14 +71,6 @@ fn read_file_head(source: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn try_raw_tiff_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
-    let d = read_file_head(source)?;
-    if d.len() < 8 || !is_tiff_magic(&d[0..4]) { return Err(anyhow::anyhow!("not TIFF")); }
-    if let Ok(r) = try_standard_tiff_thumbnail(&d, tl, q) { return Ok(r); }
-    if let Ok(r) = try_rw2_blob_thumbnail(&d, tl, q) { return Ok(r); }
-    Err(anyhow::anyhow!("no thumb in TIFF"))
-}
-
 fn try_standard_tiff_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
     let j = parse_tiff_thumbnail(d).ok_or_else(|| anyhow::anyhow!("no IFD1 thumb"))?;
     decode_resize_encode(j, tl, q)
@@ -88,15 +87,7 @@ fn try_rw2_blob_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
     Err(anyhow::anyhow!("no JPEG in RW2"))
 }
 
-// ===================== 3/4 JPEG scan (HEIC/HEIF) =====================
-
-fn try_jpeg_scan_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
-    // HEIC/HEIF 的预览 JPEG 一般在文件前部（meta box 内）
-    let d = read_file_head(source)?;
-    if d.len() < 12 || &d[4..8] != b"ftyp" { return Err(anyhow::anyhow!("not ISOBMFF")); }
-    if let Some(j) = scan_jpeg_in_file(&d, 0, 512*1024) { return decode_resize_encode(j, tl, q); }
-    Err(anyhow::anyhow!("no JPEG in ISOBMFF"))
-}
+// ===================== 3/4 ISOBMFF JPEG scan (HEIC/HEIF) =====================
 
 fn scan_jpeg_in_file(d: &[u8], start: usize, max: usize) -> Option<&[u8]> {
     let end = (start + max).min(d.len());

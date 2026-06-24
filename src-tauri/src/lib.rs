@@ -8,6 +8,7 @@ pub mod thumbnail;
 pub mod export;
 pub mod watchdog;
 pub mod commands;
+pub mod exif_pool;
 
 use tauri::Manager;
 
@@ -24,10 +25,14 @@ pub fn run() {
             std::fs::create_dir_all(&app_dir).ok();
             let db_path = app_dir.join("catalog.db");
 
-            db::init_db(&db_path)?;
+            db::init_db(&db_path.clone())?;
+            db::set_db_path(db_path.clone());
             app.manage(db::AppDatabase { path: db_path });
 
             app.manage(watchdog::Watchdog::new());
+
+            // 初始化 EXIF 池：保存 AppHandle 用于事件发射
+            exif_pool::set_event_app(app.handle().clone());
 
             Ok(())
         })
@@ -44,7 +49,7 @@ pub fn run() {
             commands::debug_list_photos,
             commands::open_directory,
             commands::reload_directory,
-            commands::extract_exif_batch,
+            commands::extract_exif_for,
             commands::get_thumbnail,
             commands::get_thumbnail_path,
             commands::preload_thumbnails,

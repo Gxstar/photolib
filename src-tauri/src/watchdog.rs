@@ -1,8 +1,15 @@
+// Watchdog — 监听目录文件变化，触发 EXIF 提取
+//
+// 重构：不再维护自己的 ExifPool，统一使用全局 exif_pool::pool()
+// 新增/修改文件时：
+//   1. INSERT 到 DB（仅新文件）
+//   2. 把路径提交给 exif_pool（带单飞去重）
+
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 use rusqlite::Connection;
@@ -29,13 +36,14 @@ impl Watchdog {
         }
     }
 
-    pub fn start(&self, dir: &Path, db_path: &Path, app: AppHandle) {
+    pub fn start(&self, dir: &Path, db_path: &Path, app: tauri::AppHandle) {
         self.stop();
 
         self.cancel.store(false, Ordering::SeqCst);
         let cancel = self.cancel.clone();
         let dir = dir.to_path_buf();
         let db_path = db_path.to_path_buf();
+        let app_for_thread = app.clone();
 
         let handle = std::thread::spawn(move || {
             let (tx, rx) = mpsc::channel::<Result<Event, notify::Error>>();
@@ -58,7 +66,7 @@ impl Watchdog {
             loop {
                 match rx.recv_timeout(Duration::from_millis(300)) {
                     Ok(Ok(event)) => {
-                        process_event(event, &dir, &db_path, &app);
+                        process_event(event, &dir, &db_path, &app_for_thread);
                     }
                     Ok(Err(_)) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -92,7 +100,7 @@ impl Drop for Watchdog {
 
 // ======================== 事件处理 ========================
 
-fn process_event(event: Event, _dir: &Path, db_path: &Path, app: &AppHandle) {
+fn process_event(event: Event, _dir: &Path, db_path: &Path, app: &tauri::AppHandle) {
     match &event.kind {
         EventKind::Create(_) => {
             for path in &event.paths {
@@ -104,14 +112,14 @@ fn process_event(event: Event, _dir: &Path, db_path: &Path, app: &AppHandle) {
         EventKind::Remove(_) => {
             for path in &event.paths {
                 if is_photo_file(path) {
-                    handle_removed_file(path, db_path, app);
+                    handle_removed_file(path, db_path);
                 }
             }
         }
         EventKind::Modify(_) => {
             for path in &event.paths {
                 if is_photo_file(path) {
-                    handle_modified_file(path, db_path, app);
+                    handle_modified_file(path, db_path);
                 }
             }
         }
@@ -131,13 +139,14 @@ fn is_photo_file(path: &Path) -> bool {
 
 // ======================== Create ========================
 
-fn handle_new_file(path: &Path, db_path: &Path, app: &AppHandle) {
+fn handle_new_file(path: &Path, db_path: &Path, app: &tauri::AppHandle) {
     let file_path = path.to_string_lossy().to_string();
     let file_name = path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let media_type = scanner::get_media_type(path);
     let file_size = std::fs::metadata(path).ok().map(|m| m.len() as i64);
+    let id = xxh3_64(file_path.as_bytes()) as i64;
 
     if let Ok(conn) = Connection::open(db_path) {
         conn.execute(
@@ -147,126 +156,32 @@ fn handle_new_file(path: &Path, db_path: &Path, app: &AppHandle) {
         ).ok();
     }
 
-    emit_dir_changed(dir_of(path), app);
+    // 通知前端文件变更
+    let dir = dir_of(path);
+    let _ = app.emit("files-changed", dir.to_string_lossy().to_string());
 
-    let file_path2 = file_path.clone();
-    let db_path2 = db_path.to_path_buf();
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        if let Ok(exif) = crate::metadata::extract_exif(Path::new(&file_path2)) {
-            if let Ok(conn) = Connection::open(&db_path2) {
-                let id = xxh3_64(file_path2.as_bytes()) as i64;
-                conn.execute(
-                    "UPDATE photos SET
-                        date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
-                        focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
-                        exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
-                        image_width=?13, image_height=?14, color_space=?15,
-                        latitude=?16, longitude=?17, altitude=?18,
-                        exif_attempted=1
-                     WHERE file_path=?19",
-                    rusqlite::params![
-                        exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
-                        exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
-                        exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
-                        exif.image_width, exif.image_height, exif.color_space,
-                        exif.latitude, exif.longitude, exif.altitude,
-                        file_path2,
-                    ],
-                ).ok();
-
-                emit_exif_patch(id, &file_path2, &exif, &app2);
-            }
-        } else {
-            if let Ok(conn) = Connection::open(&db_path2) {
-                conn.execute(
-                    "UPDATE photos SET exif_attempted=1 WHERE file_path=?1",
-                    rusqlite::params![file_path2],
-                ).ok();
-            }
-        }
-    });
+    // 注册 id 映射，提交到全局 exif_pool
+    crate::exif_pool::pool().register_paths(&[(file_path.clone(), id)]);
+    crate::exif_pool::pool().enqueue_background(vec![file_path]);
 }
 
-// ======================== Remove ========================
-
-fn handle_removed_file(path: &Path, db_path: &Path, app: &AppHandle) {
+fn handle_removed_file(path: &Path, db_path: &Path) {
     let file_path = path.to_string_lossy().to_string();
 
     if let Ok(conn) = Connection::open(db_path) {
         conn.execute("DELETE FROM photos WHERE file_path = ?1", rusqlite::params![file_path]).ok();
     }
-
-    emit_dir_changed(dir_of(path), app);
 }
 
-// ======================== Modify ========================
-
-fn handle_modified_file(path: &Path, db_path: &Path, app: &AppHandle) {
+fn handle_modified_file(path: &Path, _db_path: &Path) {
     let file_path = path.to_string_lossy().to_string();
-    let db_path = db_path.to_path_buf();
-    let app = app.clone();
+    let id = xxh3_64(file_path.as_bytes()) as i64;
 
-    std::thread::spawn(move || {
-        if let Ok(exif) = crate::metadata::extract_exif(Path::new(&file_path)) {
-            if let Ok(conn) = Connection::open(&db_path) {
-                let id = xxh3_64(file_path.as_bytes()) as i64;
-                conn.execute(
-                    "UPDATE photos SET
-                        date_taken=?1, camera_make=?2, camera_model=?3, lens_model=?4,
-                        focal_length=?5, aperture=?6, shutter_speed=?7, iso=?8,
-                        exposure_comp=?9, flash=?10, white_balance=?11, metering_mode=?12,
-                        image_width=?13, image_height=?14, color_space=?15,
-                        latitude=?16, longitude=?17, altitude=?18,
-                        exif_attempted=1
-                     WHERE file_path=?19",
-                    rusqlite::params![
-                        exif.date_taken, exif.camera_make, exif.camera_model, exif.lens_model,
-                        exif.focal_length, exif.aperture, exif.shutter_speed, exif.iso,
-                        exif.exposure_comp, exif.flash, exif.white_balance, exif.metering_mode,
-                        exif.image_width, exif.image_height, exif.color_space,
-                        exif.latitude, exif.longitude, exif.altitude,
-                        file_path,
-                    ],
-                ).ok();
-
-                emit_exif_patch(id, &file_path, &exif, &app);
-            }
-        }
-    });
+    // 修改文件：重新提交到 exif_pool（单飞去重保证不会重复处理）
+    crate::exif_pool::pool().register_paths(&[(file_path.clone(), id)]);
+    crate::exif_pool::pool().enqueue_background(vec![file_path]);
 }
-
-// ======================== 事件发射 ========================
 
 fn dir_of(path: &Path) -> &Path {
     path.parent().unwrap_or(Path::new(""))
-}
-
-fn emit_dir_changed(dir: &Path, app: &AppHandle) {
-    let _ = app.emit("files-changed", dir.to_string_lossy().to_string());
-}
-
-fn emit_exif_patch(id: i64, file_path: &str, exif: &crate::metadata::ExifFields, app: &AppHandle) {
-    let patch = serde_json::json!([{
-        "id": id, "filePath": file_path,
-        "dateTaken": exif.date_taken,
-        "cameraMake": exif.camera_make,
-        "cameraModel": exif.camera_model,
-        "lensModel": exif.lens_model,
-        "focalLength": exif.focal_length,
-        "aperture": exif.aperture,
-        "shutterSpeed": exif.shutter_speed,
-        "iso": exif.iso,
-        "exposureComp": exif.exposure_comp,
-        "flash": exif.flash,
-        "whiteBalance": exif.white_balance,
-        "meteringMode": exif.metering_mode,
-        "imageWidth": exif.image_width,
-        "imageHeight": exif.image_height,
-        "colorSpace": exif.color_space,
-        "latitude": exif.latitude,
-        "longitude": exif.longitude,
-        "altitude": exif.altitude,
-    }]);
-    let _ = app.emit("exif-updated", &patch);
 }

@@ -5,6 +5,8 @@ import type { Photo, FilterState, ViewMode, Folder, DirectoryEntry, LeftPanelTab
 export interface ExifPatch {
   id: number;
   filePath: string;
+  fileSize?: number | null;
+  fileDate?: number | null;
   dateTaken?: string | null;
   cameraMake?: string | null;
   cameraModel?: string | null;
@@ -14,7 +16,7 @@ export interface ExifPatch {
   shutterSpeed?: string | null;
   iso?: number | null;
   exposureComp?: number | null;
-  flash?: number | null;
+  flash?: string | null;
   whiteBalance?: string | null;
   meteringMode?: string | null;
   imageWidth?: number | null;
@@ -151,6 +153,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!patch) return photo;
         // 只更新 patch 中提供的字段
         const updated: Photo = { ...photo };
+        if (patch.fileSize !== undefined) updated.fileSize = patch.fileSize ?? 0;
+        if (patch.fileDate !== undefined) updated.fileDate = patch.fileDate ?? 0;
         if (patch.dateTaken !== undefined) updated.dateTaken = patch.dateTaken || "";
         if (patch.cameraMake !== undefined) updated.cameraMake = patch.cameraMake || "";
         if (patch.cameraModel !== undefined) updated.cameraModel = patch.cameraModel || "";
@@ -160,7 +164,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (patch.shutterSpeed !== undefined) updated.shutterSpeed = patch.shutterSpeed || "";
         if (patch.iso !== undefined) updated.iso = patch.iso || 0;
         if (patch.exposureComp !== undefined) updated.exposureComp = patch.exposureComp || 0;
-        if (patch.flash !== undefined) updated.flash = patch.flash || 0;
+        if (patch.flash !== undefined) updated.flash = patch.flash || "";
         if (patch.whiteBalance !== undefined) updated.whiteBalance = patch.whiteBalance || "";
         if (patch.meteringMode !== undefined) updated.meteringMode = patch.meteringMode || "";
         if (patch.imageWidth !== undefined) updated.imageWidth = patch.imageWidth || 0;

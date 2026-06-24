@@ -3,6 +3,7 @@ export interface Photo {
   filePath: string;
   fileName: string;
   fileSize: number;
+  fileDate: number;
   mediaType: string;
   thumbnailUrl: string;
 
@@ -16,7 +17,7 @@ export interface Photo {
   shutterSpeed: string;
   iso: number;
   exposureComp: number;
-  flash: number;
+  flash: string;
   whiteBalance: string;
   meteringMode: string;
   imageWidth: number;

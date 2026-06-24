@@ -3,9 +3,20 @@
 
 use rusqlite::{Connection, Result};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub struct AppDatabase {
     pub path: PathBuf,
+}
+
+static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_db_path(path: PathBuf) {
+    let _ = DB_PATH.set(path);
+}
+
+pub fn get_db_path() -> PathBuf {
+    DB_PATH.get().cloned().unwrap_or_else(|| PathBuf::from("photolib.db"))
 }
 
 /// 初始化数据库，创建所有表结构
@@ -38,7 +49,7 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
             shutter_speed   TEXT,
             iso             INTEGER,
             exposure_comp   REAL,
-            flash           INTEGER,
+            flash           TEXT,
             white_balance   TEXT,
             metering_mode   TEXT,
             image_width     INTEGER,
@@ -145,6 +156,11 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
         let sql = format!("ALTER TABLE photos ADD COLUMN {col};");
         conn.execute_batch(&sql).ok();
     }
+
+    // 迁移 v2: flash 从 INTEGER 改为 TEXT（旧数据清零，下次 EXIF 提取时重新填充）
+    conn.execute_batch(
+        "UPDATE photos SET flash = NULL, exif_attempted = 0 WHERE flash IS NOT NULL;"
+    ).ok();
 
     Ok(())
 }
