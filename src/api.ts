@@ -15,7 +15,7 @@ const getInvoke = async () => {
 };
 
 // Rust snake_case → 前端 camelCase
-function normalizePhoto(raw: Record<string, unknown>): Photo {
+export function normalizePhoto(raw: Record<string, unknown>): Photo {
   return {
     id: raw.id as number,
     filePath: (raw.filePath ?? raw.file_path ?? "") as string,
