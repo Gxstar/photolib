@@ -1,7 +1,9 @@
-// EXIF 提取池 — 优先级队列 + 单飞去重 + 5s 超时 + 4 worker
+// EXIF 提取池 — 单一优先队列 + 单飞去重 + 结果缓存 + 5s 超时 + 4 worker
 //
 // 设计目标：
-//   - 视口优先：visible 的图优先提取
+//   - 视口优先：visible 的图优先提取（extractExifFor → push_front）
+//   - 后台排程：全部文件入队尾（open_directory → push_back）
+//   - 结果缓存：in_flight 永久保留已提取结果，杜绝重复处理
 //   - 单飞去重：同一文件并发请求只处理一次
 //   - 5s 超时：RAW/损坏文件不会卡住队列
 //   - JPG 优先：快格式先做（用户立即看到）
@@ -20,7 +22,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-const NUM_WORKERS: usize = 4;
+const NUM_WORKERS: usize = 8;
 const EXIF_TIMEOUT_SECS: u64 = 5;
 
 // 简单的单飞值：可被多个 waiter 等待的 cell
@@ -57,45 +59,39 @@ impl<T: Clone> SharedCell<T> {
 
 // 全局池
 pub struct ExifPool {
-    // 普通队列（后台）— 后进后出
-    bg_queue: Arc<Mutex<VecDeque<String>>>,
-    // 优先队列（视口）— 取出时优先
-    priority_queue: Arc<Mutex<VecDeque<String>>>,
-    // in-flight 跟踪：path -> result cell
+    // 唯一队列：前端视口优先 (push_front) / 后台全部排程 (push_back)
+    queue: Arc<Mutex<VecDeque<String>>>,
+    // 结果缓存 + in-flight 跟踪：path -> result cell（永久保留，不清理）
     in_flight: Arc<Mutex<HashMap<String, Arc<SharedCell<ExifFields>>>>>,
     // path -> id
     path_to_id: Arc<Mutex<HashMap<String, i64>>>,
-    // 优先请求的 session id（用于"新请求覆盖旧请求"）
+    // 优先请求的 session id
     session: Arc<Mutex<u64>>,
-    // session -> pending paths（用于知道本次优先请求是否完成）
+    // session -> pending paths
     pending_sessions: Arc<Mutex<HashMap<u64, std::collections::HashSet<String>>>>,
 }
 
 impl ExifPool {
     fn new() -> Self {
-        let bg_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let priority_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
         let in_flight: Arc<Mutex<HashMap<String, Arc<SharedCell<ExifFields>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let path_to_id = Arc::new(Mutex::new(HashMap::new()));
         let session = Arc::new(Mutex::new(0u64));
         let pending_sessions = Arc::new(Mutex::new(HashMap::new()));
 
-        // 启动 worker 线程
         for _worker_id in 0..NUM_WORKERS {
-            let bg = bg_queue.clone();
-            let prio = priority_queue.clone();
+            let q = queue.clone();
             let inflight = in_flight.clone();
             let path_id = path_to_id.clone();
             let pending = pending_sessions.clone();
             thread::spawn(move || {
-                worker_loop(bg, prio, inflight, path_id, pending);
+                worker_loop(q, inflight, path_id, pending);
             });
         }
 
         Self {
-            bg_queue,
-            priority_queue,
+            queue,
             in_flight,
             path_to_id,
             session,
@@ -103,7 +99,6 @@ impl ExifPool {
         }
     }
 
-    // 注册路径到 id
     pub fn register_paths(&self, paths: &[(String, i64)]) {
         let mut map = self.path_to_id.lock().unwrap();
         for (p, id) in paths {
@@ -111,9 +106,9 @@ impl ExifPool {
         }
     }
 
-    // 后台排程
+    // 后台排程：放队尾
     pub fn enqueue_background(&self, paths: Vec<String>) {
-        let mut q = self.bg_queue.lock().unwrap();
+        let mut q = self.queue.lock().unwrap();
         let inflight = self.in_flight.lock().unwrap();
         for p in paths {
             if !inflight.contains_key(&p) && !q.contains(&p) {
@@ -122,20 +117,18 @@ impl ExifPool {
         }
     }
 
-    // 视口优先：把这些路径放到队首，返回 session id
+    // 视口优先：放队首
     pub fn prioritize(&self, paths: Vec<String>) -> u64 {
         let mut session = self.session.lock().unwrap();
         *session += 1;
         let new_session = *session;
         drop(session);
 
-        // 记录本次 session 的 pending paths
         let mut pending = self.pending_sessions.lock().unwrap();
         pending.insert(new_session, paths.iter().cloned().collect());
         drop(pending);
 
-        // 把这些路径放到优先队列前面
-        let mut q = self.priority_queue.lock().unwrap();
+        let mut q = self.queue.lock().unwrap();
         let inflight = self.in_flight.lock().unwrap();
         for p in paths {
             if !inflight.contains_key(&p) && !q.contains(&p) {
@@ -146,13 +139,11 @@ impl ExifPool {
         new_session
     }
 
-    // 检查 session 是否完成（所有 pending paths 都有结果了）
     pub fn is_session_done(&self, session: u64) -> bool {
         let pending = self.pending_sessions.lock().unwrap();
         pending.get(&session).map(|s| s.is_empty()).unwrap_or(true)
     }
 
-    // 等待 session 完成（带超时）
     pub fn wait_session(&self, session: u64, timeout: Duration) -> bool {
         let start = std::time::Instant::now();
         while std::time::Instant::now() - start < timeout {
@@ -164,19 +155,16 @@ impl ExifPool {
         false
     }
 
-    // 单飞：等待 in-flight 结果
     pub fn wait_in_flight(&self, file_path: &str) -> Option<ExifFields> {
         let map = self.in_flight.lock().unwrap();
         map.get(file_path).map(|c| c.wait())
     }
 
-    // 单飞：尝试获取（非阻塞）
     pub fn try_get_in_flight(&self, file_path: &str) -> Option<ExifFields> {
         let map = self.in_flight.lock().unwrap();
         map.get(file_path).and_then(|c| c.get())
     }
 
-    // 获取 session 内的已完成结果（用于同步返回）
     pub fn take_session_results(&self, session: u64) -> Vec<(String, i64, ExifFields)> {
         let pending = self.pending_sessions.lock().unwrap();
         let Some(paths) = pending.get(&session) else {
@@ -194,7 +182,6 @@ impl ExifPool {
         results
     }
 
-    // 清理 session
     pub fn clear_session(&self, session: u64) {
         self.pending_sessions.lock().unwrap().remove(&session);
     }
@@ -210,32 +197,23 @@ pub fn pool() -> &'static ExifPool {
 // ==================== Worker 主循环 ====================
 
 fn worker_loop(
-    bg_queue: Arc<Mutex<VecDeque<String>>>,
-    priority_queue: Arc<Mutex<VecDeque<String>>>,
+    queue: Arc<Mutex<VecDeque<String>>>,
     in_flight: Arc<Mutex<HashMap<String, Arc<SharedCell<ExifFields>>>>>,
     path_to_id: Arc<Mutex<HashMap<String, i64>>>,
     pending_sessions: Arc<Mutex<HashMap<u64, std::collections::HashSet<String>>>>,
 ) {
     loop {
-        // 拉取一个任务：优先队列 > 后台队列
         let job = {
-            let mut prio = priority_queue.lock().unwrap();
-            if let Some(p) = prio.pop_front() {
-                Some(p)
-            } else {
-                drop(prio);
-                let mut bg = bg_queue.lock().unwrap();
-                bg.pop_front()
-            }
+            let mut q = queue.lock().unwrap();
+            q.pop_front()
         };
 
         let Some(file_path) = job else {
-            // 队列都空，短暂休眠
             thread::sleep(Duration::from_millis(50));
             continue;
         };
 
-        // 单飞去重
+        // 单飞去重：已有结果缓存则跳过
         let cell = {
             let mut map = in_flight.lock().unwrap();
             if let Some(existing) = map.get(&file_path) {
@@ -247,27 +225,23 @@ fn worker_loop(
             }
         };
 
-        // 已经有结果？跳过
         if cell.get().is_some() {
-            finalize_in_flight(&file_path, &in_flight, &pending_sessions);
+            finalize_pending(&file_path, &pending_sessions);
             continue;
         }
 
-        // 提取（带超时）
         let result = extract_exif_with_timeout(PathBuf::from(&file_path));
 
         match result {
             Ok(exif) => {
                 cell.set(exif.clone());
 
-                // 写 DB（异步、不阻塞 worker 主循环）
                 let fp = file_path.clone();
                 let exif_clone = exif.clone();
                 let _ = thread::Builder::new().stack_size(512 * 1024).spawn(move || {
                     write_exif_to_db(&fp, &exif_clone);
                 });
 
-                // 发 exif-updated 事件
                 let id = {
                     let map = path_to_id.lock().unwrap();
                     map.get(&file_path).copied().unwrap_or(0)
@@ -281,7 +255,7 @@ fn worker_loop(
             }
             Err(e) => {
                 eprintln!("[ExifPool] FAIL {}: {:#}", file_path, e);
-                cell.set(ExifFields::default()); // 标记完成（空对象）
+                cell.set(ExifFields::default());
                 let fp = file_path.clone();
                 let _ = thread::Builder::new().stack_size(512 * 1024).spawn(move || {
                     mark_attempted(&fp);
@@ -289,25 +263,18 @@ fn worker_loop(
             }
         }
 
-        finalize_in_flight(&file_path, &in_flight, &pending_sessions);
+        finalize_pending(&file_path, &pending_sessions);
     }
 }
 
-fn finalize_in_flight(
+fn finalize_pending(
     file_path: &str,
-    in_flight: &Arc<Mutex<HashMap<String, Arc<SharedCell<ExifFields>>>>>,
     pending_sessions: &Arc<Mutex<HashMap<u64, std::collections::HashSet<String>>>>,
 ) {
-    // 从所有 session 的 pending 中移除这个 path
     let mut sessions = pending_sessions.lock().unwrap();
     for (_, paths) in sessions.iter_mut() {
         paths.remove(file_path);
     }
-    drop(sessions);
-
-    // 清理 in_flight
-    let mut map = in_flight.lock().unwrap();
-    map.remove(file_path);
 }
 
 // ==================== 超时包装 ====================

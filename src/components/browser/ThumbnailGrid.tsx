@@ -8,7 +8,7 @@ import { VirtuosoGrid } from "react-virtuoso";
 import { invoke } from "@tauri-apps/api/core";
 
 // ========== Thumbnail concurrency limiter ==========
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 4;
 let running = 0;
 const pendingFast: Array<() => void> = [];
 const pendingSlow: Array<() => void> = [];
@@ -143,8 +143,9 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
     if (cur.length === 0) return;
     const start = Math.max(0, range.startIndex);
     const end = Math.min(cur.length - 1, range.endIndex);
-    const visible = cur.slice(start, end + 1);
-    // 只对没有 EXIF 的图请求（dateTaken 为空或 null）
+    // 预取：可见范围 + 下方额外 40 个（一屏大约 20-30 个格子）
+    const prefetchEnd = Math.min(cur.length - 1, end + 40);
+    const visible = cur.slice(start, prefetchEnd + 1);
     const paths = visible
       .filter((p) => !p.dateTaken || p.dateTaken === "")
       .map((p) => p.filePath);
@@ -220,7 +221,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
             totalCount={photos.length}
             itemContent={itemContent}
             listClassName="flex flex-wrap gap-0.5 p-2.5 content-start"
-            increaseViewportBy={400}
+            increaseViewportBy={800}
             computeItemKey={(index) => photos[index].id}
             rangeChanged={handleRangeChanged}
           />

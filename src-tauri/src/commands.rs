@@ -1062,7 +1062,7 @@ pub async fn preload_thumbnails(folder_path: String) -> Result<usize, String> {
             return Ok(0usize);
         }
 
-        const PRELOAD_LIMIT: usize = 50;
+        const PRELOAD_LIMIT: usize = 200;
         let mut cached = 0usize;
 
         for file in files.iter().take(PRELOAD_LIMIT) {

@@ -2,10 +2,10 @@
 //
 // 优化策略（对标 Windows 资源管理器 / XnView MP）：
 //   1. 快路径：JPEG APP1 EXIF 内嵌缩略图（~5ms）
-//   2. RAW 路径：TIFF IFD1 嵌缩图 + RW2 JPEG blob 扫描
+//   2. RAW 路径：rawler::analyze::extract_thumbnail_pixels（跨格式统一）
 //   3. JPEG 扫描路径：ISOBMFF 文件中扫 SOI→EOI（HEIC/HEIF 内嵌 JPEG 预览）
-//   4. WIC 路径：Windows Imaging Component 系统 API（AVIF/HEIC，仅 Windows，零 C 依赖）
-//   5. 缓存：磁盘缓存 v6
+//   4. WIC 路径：Windows Imaging Component 系统 API（AVIF/HEIC，仅 Windows）
+//   5. 缓存：磁盘缓存 v7
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
@@ -19,14 +19,15 @@ pub enum ThumbLevel { L1, L2 }
 pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Vec<u8>> {
     let (tl, q) = match level { ThumbLevel::L1 => (480u32, 70u8), ThumbLevel::L2 => (1920u32, 85u8) };
 
-    // 预读 2MB 文件头，所有路径共享，避免 RAW 文件重复 I/O
+    // RAW files → rawler directly, skip 2MB head read
+    if is_raw_extension(source) {
+        return try_rawler_thumbnail(source, tl, q);
+    }
+
+    // Non-RAW paths: read head once, try JPEG EXIF then ISOBMFF
     if let Ok(head) = read_file_head(source) {
         if let Some(j) = extract_exif_thumbnail_jpeg(&head) {
             if let Ok(d) = decode_resize_encode(j, tl, q) { return Ok(d); }
-        }
-        if is_tiff_magic(&head[..head.len().min(4)]) {
-            if let Ok(d) = try_standard_tiff_thumbnail(&head, tl, q) { return Ok(d); }
-            if let Ok(d) = try_rw2_blob_thumbnail(&head, tl, q) { return Ok(d); }
         }
         if head.len() >= 12 && &head[4..8] == b"ftyp" {
             if let Some(j) = scan_jpeg_in_file(&head, 0, 512*1024) {
@@ -37,6 +38,18 @@ pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Ve
 
     if let Ok(d) = try_wic_api_thumbnail(source, tl, q) { return Ok(d); }
     Err(anyhow::anyhow!("unsupported: {:?}", source))
+}
+
+fn is_raw_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| {
+            matches!(ext.to_lowercase().as_str(),
+                "cr3" | "cr2" | "nef" | "nrw" | "arw" | "srf" | "sr2"
+                | "raf" | "orf" | "dng" | "rw2" | "pef" | "3fr" | "iiq"
+            )
+        })
+        .unwrap_or(false)
 }
 
 // ===================== 1/4 JPEG EXIF =====================
@@ -56,35 +69,25 @@ fn extract_exif_thumbnail_jpeg(d: &[u8]) -> Option<&[u8]> {
     } None
 }
 
-// ===================== 2/4 RAW TIFF =====================
+// ===================== 2/4 RAW — rawler =====================
 
-/// RAW 文件嵌入缩略图通常集中在文件头 1.5MB 内（EXIF MakerNote 之前）
-/// 读取整个 30-80MB 的 RAW 文件是不必要的
-const RAW_HEAD_READ_LIMIT: usize = 2 * 1024 * 1024; // 2MB
-
-fn read_file_head(source: &Path) -> anyhow::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut file = fs::File::open(source)?;
-    let mut buf = vec![0u8; RAW_HEAD_READ_LIMIT];
-    let n = file.read(&mut buf)?;
-    buf.truncate(n);
+fn try_rawler_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
+    let params = rawler::decoders::RawDecodeParams::default();
+    let img = rawler::analyze::extract_thumbnail_pixels(source, &params)?;
+    let le = img.width().max(img.height());
+    if le < tl / 4 {
+        return Err(anyhow::anyhow!("thumbnail too small ({}px)", le));
+    }
+    let f = if le > tl || le < tl / 2 {
+        img.resize(tl, u32::MAX, FilterType::Triangle)
+    } else {
+        img
+    };
+    let mut buf = Vec::new();
+    let mut cur = Cursor::new(&mut buf);
+    let mut enc = JpegEncoder::new_with_quality(&mut cur, q);
+    enc.encode(f.as_bytes(), f.width(), f.height(), f.color().into())?;
     Ok(buf)
-}
-
-fn try_standard_tiff_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
-    let j = parse_tiff_thumbnail(d).ok_or_else(|| anyhow::anyhow!("no IFD1 thumb"))?;
-    decode_resize_encode(j, tl, q)
-}
-
-fn try_rw2_blob_thumbnail(d: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
-    if &d[0..4] != b"IIU\0" { return Err(anyhow::anyhow!("not RW2")); }
-    let off = u32::from_le_bytes([d[4],d[5],d[6],d[7]]) as usize;
-    if off+2 > d.len() { return Err(anyhow::anyhow!("bad IFD0")); }
-    let n = u16::from_le_bytes([d[off],d[off+1]]) as usize;
-    let end = off+2+n*12+4;
-    if end >= d.len() { return Err(anyhow::anyhow!("IFD0 past EOF")); }
-    if let Some(j) = scan_jpeg_in_file(d, end+8, 256*1024) { return decode_resize_encode(j, tl, q); }
-    Err(anyhow::anyhow!("no JPEG in RW2"))
 }
 
 // ===================== 3/4 ISOBMFF JPEG scan (HEIC/HEIF) =====================
@@ -146,7 +149,6 @@ fn try_wic_api_thumbnail(source: &Path, tl: u32, q: u8) -> anyhow::Result<Vec<u8
     let (mut w, mut h) = (0u32, 0u32);
     unsafe { frame.GetSize(&mut w, &mut h) }.map_err(|e| anyhow::anyhow!("WIC size: {}", e))?;
 
-    // ✅ 在解码管线中直接缩放，避免解码全分辨率再 resize
     let scale_ratio = tl as f64 / w.max(h) as f64;
     let (out_w, out_h) = if scale_ratio < 1.0 {
         ((w as f64 * scale_ratio) as u32, (h as f64 * scale_ratio) as u32)
@@ -190,6 +192,17 @@ fn try_wic_api_thumbnail(_: &Path, _: u32, _: u8) -> anyhow::Result<Vec<u8>> {
 
 // ===================== Utilities =====================
 
+const RAW_HEAD_READ_LIMIT: usize = 2 * 1024 * 1024; // 2MB
+
+fn read_file_head(source: &Path) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut file = fs::File::open(source)?;
+    let mut buf = vec![0u8; RAW_HEAD_READ_LIMIT];
+    let n = file.read(&mut buf)?;
+    buf.truncate(n);
+    Ok(buf)
+}
+
 fn decode_resize_encode(j: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
     if j.is_empty() { return Err(anyhow::anyhow!("empty")); }
     let img = image::load_from_memory(j)?;
@@ -201,11 +214,6 @@ fn decode_resize_encode(j: &[u8], tl: u32, q: u8) -> anyhow::Result<Vec<u8>> {
     let mut enc = JpegEncoder::new_with_quality(&mut cur, q);
     enc.encode(f.as_bytes(), f.width(), f.height(), f.color().into())?;
     Ok(buf)
-}
-
-fn is_tiff_magic(m: &[u8]) -> bool {
-    m.len()>=2 && (&m[0..2]==b"II" || &m[0..2]==b"MM") ||
-    m.len()>=4 && (&m[0..4]==b"IIU\0" || &m[0..4]==b"IIRO" || &m[0..4]==b"IIRS")
 }
 
 fn parse_tiff_thumbnail(td: &[u8]) -> Option<&[u8]> {
@@ -233,11 +241,10 @@ fn parse_tiff_thumbnail(td: &[u8]) -> Option<&[u8]> {
 pub fn get_cache_path(file_path: &str) -> PathBuf {
     let dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("photolib").join("thumbs");
     fs::create_dir_all(&dir).ok();
-    dir.join(format!("v6_{:016x}.jpg", xxhash_rust::xxh3::xxh3_64(file_path.as_bytes())))
+    dir.join(format!("v7_{:016x}.jpg", xxhash_rust::xxh3::xxh3_64(file_path.as_bytes())))
 }
 pub fn get_thumbnail_cache_path(source: &Path) -> PathBuf { get_cache_path(&source.to_string_lossy()) }
 
-/// 检查缓存是否对源文件有效：单次扫描，零额外 syscall 浪费
 pub fn cache_is_valid(source: &Path, cache: &Path) -> bool {
     let (Ok(sm), Ok(cm)) = (fs::metadata(source), fs::metadata(cache)) else {
         return false;

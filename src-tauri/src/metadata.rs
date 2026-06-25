@@ -35,14 +35,136 @@ pub struct ExifFields {
     pub contrast: Option<String>,
 }
 
+const RAW_EXTENSIONS: &[&str] = &[
+    "cr3", "cr2", "nef", "nrw", "arw", "srf", "sr2",
+    "raf", "orf", "dng", "rw2", "pef", "3fr", "iiq",
+];
+
 pub fn extract_exif(file_path: &Path) -> anyhow::Result<ExifFields> {
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if RAW_EXTENSIONS.contains(&ext.as_str()) {
+        extract_exif_rawler(file_path)
+    } else {
+        extract_exif_nom(file_path)
+    }
+}
+
+// ==================== rawler path (RAW files) ====================
+
+fn extract_exif_rawler(file_path: &Path) -> anyhow::Result<ExifFields> {
+    let rawfile = rawler::rawsource::RawSource::new(file_path)
+        .map_err(|e| anyhow::anyhow!("rawler open {}: {}", file_path.display(), e))?;
+    let decoder = rawler::get_decoder(&rawfile)
+        .map_err(|e| anyhow::anyhow!("rawler get_decoder {}: {}", file_path.display(), e))?;
+    let meta = decoder.raw_metadata(&rawfile, &rawler::decoders::RawDecodeParams::default())
+        .map_err(|e| anyhow::anyhow!("rawler raw_metadata {}: {}", file_path.display(), e))?;
+
+    let exif = &meta.exif;
+    let make = if meta.make.is_empty() { None } else { Some(meta.make.clone()) };
+    let model = if meta.model.is_empty() { None } else { Some(meta.model.clone()) };
+
+    Ok(ExifFields {
+        date_taken: exif.date_time_original.clone()
+            .or_else(|| exif.create_date.clone())
+            .or_else(|| exif.modify_date.clone()),
+        camera_make: make,
+        camera_model: model,
+        lens_model: exif.lens_model.clone(),
+        focal_length: exif.focal_length.as_ref().map(rational_to_f64),
+        aperture: exif.fnumber.as_ref().map(rational_to_f64)
+            .or_else(|| exif.aperture_value.as_ref().and_then(|v| apex_to_fnumber(Some(rational_to_f64(v))))),
+        shutter_speed: exif.exposure_time.as_ref()
+            .and_then(|v| format_shutter(Some(rational_to_f64(v))))
+            .or_else(|| exif.shutter_speed_value.as_ref()
+                .and_then(|v| format_shutter_apex(Some(srational_to_f64(v))))),
+        iso: exif.iso_speed_ratings.map(|v| v as i64)
+            .or_else(|| exif.iso_speed.map(|v| v as i64)),
+        exposure_comp: exif.exposure_bias.as_ref().map(srational_to_f64),
+        flash: exif.flash.map(|v| map_flash_raw(v)),
+        white_balance: exif.white_balance.and_then(|v| map_white_balance(Some(v as u32))),
+        metering_mode: exif.metering_mode.and_then(|v| map_metering_mode(Some(v as u32))),
+        image_width: None,
+        image_height: None,
+        color_space: exif.color_space.and_then(|v| map_color_space(Some(v as u32))),
+        latitude: exif.gps.as_ref().and_then(|g| gps_to_decimal(&g.gps_latitude, &g.gps_latitude_ref, false)),
+        longitude: exif.gps.as_ref().and_then(|g| gps_to_decimal(&g.gps_longitude, &g.gps_longitude_ref, true)),
+        altitude: exif.gps.as_ref().and_then(|g| {
+            g.gps_altitude.as_ref().map(|alt| {
+                let a = rational_to_f64(alt);
+                if g.gps_altitude_ref == Some(1) { -a } else { a }
+            })
+        }),
+        software: None,
+        copyright: exif.copyright.clone(),
+        image_description: None,
+        orientation: exif.orientation.map(|v| v as i64),
+        exposure_program: exif.exposure_program.and_then(|v| map_exposure_program(Some(v as u32))),
+        max_aperture: exif.max_aperture_value.as_ref()
+            .and_then(|v| apex_to_fnumber(Some(rational_to_f64(v)))),
+        focal_length_35mm: None,
+        lens_make: exif.lens_make.clone()
+            .or_else(|| meta.lens.as_ref().and_then(|l| {
+                if l.lens_make.is_empty() { None } else { Some(l.lens_make.clone()) }
+            })),
+        scene_capture_type: exif.scene_capture_type.and_then(|v| map_scene_capture_type(Some(v as u32))),
+        contrast: None,
+    })
+}
+
+fn rational_to_f64(r: &rawler::formats::tiff::value::Rational) -> f64 {
+    r.n as f64 / r.d as f64
+}
+
+fn srational_to_f64(r: &rawler::formats::tiff::value::SRational) -> f64 {
+    r.n as f64 / r.d as f64
+}
+
+fn gps_to_decimal(coords: &Option<[rawler::formats::tiff::value::Rational; 3]>, ref_val: &Option<String>, neg_ref: bool) -> Option<f64> {
+    let c = coords.as_ref()?;
+    let ref_str = ref_val.as_deref().unwrap_or("");
+    let deg = rational_to_f64(&c[0]);
+    let min = rational_to_f64(&c[1]);
+    let sec = rational_to_f64(&c[2]);
+    let mut val = deg + min / 60.0 + sec / 3600.0;
+    if neg_ref && (ref_str == "W" || ref_str == "S") {
+        val = -val;
+    }
+    if !neg_ref && (ref_str == "N" || ref_str == "E") {
+        // positive already
+    }
+    Some(val)
+}
+
+fn format_shutter(val: Option<f64>) -> Option<String> {
+    let v = val?;
+    if v <= 0.0 { return None; }
+    Some(if v >= 1.0 {
+        format!("{:.0}s", v)
+    } else {
+        let den = (1.0 / v).round() as u64;
+        format!("1/{}s", den)
+    })
+}
+
+fn format_shutter_apex(val: Option<f64>) -> Option<String> {
+    format_shutter(val.map(|v| (-v).exp2()))
+}
+
+// ==================== nom-exif path (non-RAW files) ====================
+
+fn extract_exif_nom(file_path: &Path) -> anyhow::Result<ExifFields> {
     let mut parser = MediaParser::new();
     let ms = MediaSource::open(file_path)
         .map_err(|e| anyhow::anyhow!("Failed to open {}: {}", file_path.display(), e))?;
     let iter = parser.parse_exif(ms)
         .map_err(|e| anyhow::anyhow!("EXIF parse {}: {}", file_path.display(), e))?;
     let exif: Exif = iter.into();
-    fields_from_exif(&exif, file_path)
+    fields_from_nom(&exif, file_path)
 }
 
 fn read_image_dimensions(file_path: &Path) -> (Option<i64>, Option<i64>) {
@@ -52,7 +174,7 @@ fn read_image_dimensions(file_path: &Path) -> (Option<i64>, Option<i64>) {
     }
 }
 
-fn fields_from_exif(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields> {
+fn fields_from_nom(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields> {
     let (dim_w, dim_h) = read_image_dimensions(file_path);
     Ok(ExifFields {
         date_taken: get_datetime_str(exif, ExifTag::DateTimeOriginal)
@@ -97,6 +219,8 @@ fn fields_from_exif(exif: &Exif, file_path: &Path) -> anyhow::Result<ExifFields>
         contrast: map_contrast(get_uint(exif, ExifTag::Contrast)),
     })
 }
+
+// ==================== Shared formatting helpers ====================
 
 fn clean_string(s: &str) -> Option<String> {
     let mut cleaned = s.trim().to_string();
@@ -145,107 +269,117 @@ fn apex_to_fnumber(apex: Option<f64>) -> Option<f64> {
     apex.map(|v| (2.0_f64).powf(v / 2.0))
 }
 
-fn map_flash(val: Option<i64>) -> Option<String> {
-    Some(match val? {
-        v if v & 0b0000_0001 == 0 => "闪光灯未触发".to_string(),
-        v => {
-            let mut parts = vec!["闪光灯触发".to_string()];
-            match (v >> 1) & 0b11 {
-                0 => parts.push("回光检测未知".to_string()),
-                2 => parts.push("回光未检测到".to_string()),
-                3 => parts.push("回光已检测".to_string()),
-                _ => {}
-            }
-            match (v >> 3) & 0b11 {
-                1 => parts.push("强制闪光".to_string()),
-                2 => parts.push("强制关闭".to_string()),
-                3 => parts.push("自动闪光".to_string()),
-                _ => {}
-            }
-            if (v >> 5) & 0b1 == 1 { parts.push("无闪光功能".to_string()); }
-            if (v >> 6) & 0b1 == 1 { parts.push("防红眼".to_string()); }
-            parts.join(" / ")
-        }
-    })
+fn map_flash_raw(val: u16) -> String {
+    map_flash_int(val as i64)
 }
 
-fn format_shutter(val: Option<f64>) -> Option<String> {
-    let v = val?;
-    if v <= 0.0 { return None; }
-    Some(if v >= 1.0 {
-        format!("{:.0}s", v)
+fn map_flash_int(val: i64) -> String {
+    if val & 0b0000_0001 == 0 {
+        "闪光灯未触发".to_string()
     } else {
-        let den = (1.0 / v).round() as u64;
-        format!("1/{}s", den)
-    })
+        let mut parts = vec!["闪光灯触发".to_string()];
+        match (val >> 1) & 0b11 {
+            0 => parts.push("回光检测未知".to_string()),
+            2 => parts.push("回光未检测到".to_string()),
+            3 => parts.push("回光已检测".to_string()),
+            _ => {}
+        }
+        match (val >> 3) & 0b11 {
+            1 => parts.push("强制闪光".to_string()),
+            2 => parts.push("强制关闭".to_string()),
+            3 => parts.push("自动闪光".to_string()),
+            _ => {}
+        }
+        if (val >> 5) & 0b1 == 1 { parts.push("无闪光功能".to_string()); }
+        if (val >> 6) & 0b1 == 1 { parts.push("防红眼".to_string()); }
+        parts.join(" / ")
+    }
 }
 
-fn format_shutter_apex(val: Option<f64>) -> Option<String> {
-    format_shutter(val.map(|v| (-v).exp2()))
+fn map_flash(val: Option<i64>) -> Option<String> {
+    val.map(map_flash_int)
 }
 
 fn map_white_balance(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        0 => "自动".to_string(),
-        1 => "手动".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            0 => "自动".to_string(),
+            1 => "手动".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }
 
 fn map_metering_mode(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        0 => "未知".to_string(),
-        1 => "平均测光".to_string(),
-        2 => "中央重点测光".to_string(),
-        3 => "点测光".to_string(),
-        4 => "多点测光".to_string(),
-        5 => "评价测光".to_string(),
-        6 => "局部测光".to_string(),
-        255 => "其他".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            0 => "未知".to_string(),
+            1 => "平均测光".to_string(),
+            2 => "中央重点测光".to_string(),
+            3 => "点测光".to_string(),
+            4 => "多点测光".to_string(),
+            5 => "评价测光".to_string(),
+            6 => "局部测光".to_string(),
+            255 => "其他".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }
 
 fn map_color_space(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        1 => "sRGB".to_string(),
-        2 => "Adobe RGB".to_string(),
-        65535 => "未校准".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            1 => "sRGB".to_string(),
+            2 => "Adobe RGB".to_string(),
+            65535 => "未校准".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }
 
 fn map_exposure_program(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        0 => "未定义".to_string(),
-        1 => "手动".to_string(),
-        2 => "程序自动".to_string(),
-        3 => "光圈优先".to_string(),
-        4 => "快门优先".to_string(),
-        5 => "创意程序".to_string(),
-        6 => "运动程序".to_string(),
-        7 => "人像模式".to_string(),
-        8 => "风景模式".to_string(),
-        9 => "B门".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            0 => "未定义".to_string(),
+            1 => "手动".to_string(),
+            2 => "程序自动".to_string(),
+            3 => "光圈优先".to_string(),
+            4 => "快门优先".to_string(),
+            5 => "创意程序".to_string(),
+            6 => "运动程序".to_string(),
+            7 => "人像模式".to_string(),
+            8 => "风景模式".to_string(),
+            9 => "B门".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }
 
 fn map_scene_capture_type(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        0 => "标准".to_string(),
-        1 => "风景".to_string(),
-        2 => "人像".to_string(),
-        3 => "夜景".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            0 => "标准".to_string(),
+            1 => "风景".to_string(),
+            2 => "人像".to_string(),
+            3 => "夜景".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }
 
 fn map_contrast(val: Option<u32>) -> Option<String> {
-    Some(match val? {
-        0 => "标准".to_string(),
-        1 => "柔和".to_string(),
-        2 => "锐利".to_string(),
-        n => format!("未知({})", n),
-    })
+    match val {
+        None => None,
+        Some(v) => Some(match v {
+            0 => "标准".to_string(),
+            1 => "柔和".to_string(),
+            2 => "锐利".to_string(),
+            n => format!("未知({})", n),
+        }),
+    }
 }

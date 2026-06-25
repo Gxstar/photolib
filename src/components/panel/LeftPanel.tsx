@@ -108,7 +108,7 @@ export function LeftPanel() {
       // ThumbnailGrid 的 rangeChanged 会在 scroll 时持续触发更精准的请求
       const visCount = Math.ceil(window.innerHeight / 200) * Math.ceil(window.innerWidth / 200) + 10;
       const initialVisPaths = photos
-        .slice(0, Math.min(visCount, 30))
+        .slice(0, Math.min(visCount, 100))
         .filter(p => !p.dateTaken || p.dateTaken === "")
         .map(p => p.filePath);
       if (initialVisPaths.length > 0) {
