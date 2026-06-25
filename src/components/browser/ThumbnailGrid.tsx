@@ -8,7 +8,7 @@ import { VirtuosoGrid } from "react-virtuoso";
 import { invoke } from "@tauri-apps/api/core";
 
 // ========== Thumbnail concurrency limiter ==========
-const MAX_CONCURRENT = 4;
+const MAX_CONCURRENT = 12;
 let running = 0;
 const pendingFast: Array<() => void> = [];
 const pendingSlow: Array<() => void> = [];
