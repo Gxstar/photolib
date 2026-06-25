@@ -36,7 +36,21 @@ pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Ve
         }
     }
 
+    // 2.5. Windows Shell thumbnail cache (IShellItemImageFactory) — fast warm-cache path for slow formats
+    #[cfg(target_os = "windows")]
+    {
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if matches!(ext.as_str(), "cr3" | "cr2" | "nef" | "nrw" | "arw" | "srf" | "sr2"
+                          | "raf" | "orf" | "dng" | "rw2" | "pef" | "3fr" | "iiq"
+                          | "heic" | "heif" | "avif") {
+            if let Some(bytes) = crate::win_thumbcache::try_shell_thumbnail(source, tl) {
+                return Ok(bytes);
+            }
+        }
+    }
+
     if let Ok(d) = try_wic_api_thumbnail(source, tl, q) { return Ok(d); }
+
     Err(anyhow::anyhow!("unsupported: {:?}", source))
 }
 

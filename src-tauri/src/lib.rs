@@ -10,6 +10,9 @@ pub mod watchdog;
 pub mod commands;
 pub mod exif_pool;
 
+#[cfg(target_os = "windows")]
+pub mod win_thumbcache;
+
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
