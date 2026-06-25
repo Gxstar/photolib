@@ -47,13 +47,16 @@ listen("meta-loaded", (event) => {
 });
 
 // 监听骨架事件 — 进入大目录时立即渲染占位格
+let lastNavId = 0;
 listen("photos-skeleton", (event) => {
-  const payload = event.payload as { folderPath: string; photos: Record<string, unknown>[] };
+  const payload = event.payload as { folderPath: string; navId: number; photos: Record<string, unknown>[] };
   const state = useAppStore.getState();
-  if (state.currentDir === payload.folderPath) {
-    const photos = payload.photos.map(normalizePhoto);
-    useAppStore.getState().setPhotos(photos);
-  }
+  if (state.currentDir !== payload.folderPath) return;
+  if (payload.navId < lastNavId) return;        // stale event from a previous selection
+  lastNavId = payload.navId;
+  const photos = payload.photos.map(normalizePhoto);
+  useAppStore.getState().setPhotos(photos);
+  useAppStore.getState().setLoading(false);
 });
 
 // 监听目录文件变化 — 文件增删时自动重新加载

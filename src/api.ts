@@ -108,15 +108,10 @@ export async function getPhotosByFolderDeep(folderPath: string): Promise<Photo[]
   const raw = await invoke<Record<string, unknown>[]>("get_photos_by_folder_deep", { folderPath });
   return raw.map(normalizePhoto);
 }
-/// 打开目录并返回照片（扫描文件系统，不读 DB，极速）
-export async function openDirectory(folderPath: string): Promise<Photo[]> {
+/// 打开目录（skeleton 通过 "photos-skeleton" 事件送达，不返回值）
+export async function openDirectory(folderPath: string, navId: number): Promise<void> {
   const invoke = await getInvoke();
-  const raw = await invoke<Record<string, unknown>[]>("open_directory", { folderPath });
-  if (!Array.isArray(raw)) {
-    console.error("[PhotoLib] open_directory returned non-array:", typeof raw);
-    return [];
-  }
-  return raw.map(normalizePhoto);
+  await invoke<null>("open_directory", { folderPath, navId });
 }
 
 /// 从 DB 重新加载目录照片（含完整 EXIF），用于 extractExifBatch 后刷新

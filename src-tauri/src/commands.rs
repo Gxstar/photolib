@@ -784,9 +784,10 @@ pub fn build_enriched_skeleton_for_test(p: &std::path::Path) -> anyhow::Result<V
 #[tauri::command]
 pub async fn open_directory(
     folder_path: String,
+    nav_id: u64,
     db: State<'_, crate::db::AppDatabase>,
     app: tauri::AppHandle,
-) -> Result<Vec<Photo>, String> {
+) -> Result<(), String> {
     eprintln!("[PhotoLib::open_directory] Opening: {:?}", folder_path);
     let path = std::path::PathBuf::from(&folder_path);
     if !path.exists() || !path.is_dir() {
@@ -808,7 +809,7 @@ pub async fn open_directory(
     // emit "photos-skeleton" 事件给前端（前端可以用此触发 UI 切换 loading）
     let _ = app.emit("photos-skeleton", serde_json::json!({
         "folderPath": &folder_path,
-        "navId": 0u64,             // placeholder; Task 4 makes this a real parameter
+        "navId": nav_id,
         "photos": &skeleton,
     }));
 
@@ -823,7 +824,7 @@ pub async fn open_directory(
         }
     });
 
-    Ok(skeleton)
+    Ok(())
 }
 
 async fn open_directory_background(

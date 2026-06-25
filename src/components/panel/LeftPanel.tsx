@@ -97,44 +97,48 @@ export function LeftPanel() {
     setPhotos([]);
     setLoading(true);
 
-    try {
-      const photos = await openDirectory(node.path);
-      if (navId !== navRef.current) return;
-      cache.set(node.path, photos);
-      setPhotos(photos);
-      setLoading(false);
+    const dirPath = node.path;
 
-      // 视口优先 EXIF：把"当前可见区域"的前 30 张提交到后端优先队列
-      // ThumbnailGrid 的 rangeChanged 会在 scroll 时持续触发更精准的请求
+    // Fire-and-forget: skeleton arrives via the "photos-skeleton" event in main.tsx
+    openDirectory(dirPath, navId).catch((err) => {
+      if (navId !== navRef.current) return;
+      setLoading(false);
+      console.error("openDirectory error:", err);
+      setError("加载照片失败");
+    });
+
+    // The skeleton (with cached EXIF) arrives asynchronously and triggers setPhotos.
+    // Once it's rendered, the grid mount fires rangeChanged, which calls extractExifFor.
+    // Here we still kick off:
+    //   - viewport-priority EXIF (visible cells), in case the skeleton EXIF is empty
+    //   - side children prefetch
+    //   - thumbnail preload
+    setTimeout(() => {
+      if (navId !== navRef.current) return;
+      const cur = useAppStore.getState().photos;
+      if (cur.length === 0) return;
       const visCount = Math.ceil(window.innerHeight / 200) * Math.ceil(window.innerWidth / 200) + 10;
-      const initialVisPaths = photos
+      const initialVisPaths = cur
         .slice(0, Math.min(visCount, 100))
-        .filter(p => !p.dateTaken || p.dateTaken === "")
-        .map(p => p.filePath);
+        .filter((p) => !p.dateTaken || p.dateTaken === "")
+        .map((p) => p.filePath);
       if (initialVisPaths.length > 0) {
         extractExifFor(initialVisPaths).catch(() => {});
       }
+    }, 100);
 
-      browseDirectory(node.path).then(entries => {
-        const children: TreeNode[] = entries.map(e => ({
-          path: e.path,
-          name: e.name,
-          children: null,
-          loading: false,
-          expanded: false,
-          isDrive: false,
-        }));
-        setTree(prev => expandWithChildren(prev, node.path, children));
-      }).catch(() => {});
-
-      const dirPath = node.path;
-      setTimeout(() => preloadThumbnails(dirPath).catch(() => {}), 500);
-    } catch (err) {
+    browseDirectory(dirPath).then((entries) => {
       if (navId !== navRef.current) return;
-      setLoading(false);
-      console.error("selectNode error:", err);
-      setError("加载照片失败");
-    }
+      const children: TreeNode[] = entries.map((e) => ({
+        path: e.path, name: e.name, children: null, loading: false, expanded: false, isDrive: false,
+      }));
+      setTree((prev) => expandWithChildren(prev, dirPath, children));
+    }).catch(() => {});
+
+    setTimeout(() => {
+      if (navId !== navRef.current) return;
+      preloadThumbnails(dirPath).catch(() => {});
+    }, 500);
   }, [setCurrentDir, setSelectedAlbumId, setPhotos, setLoading, setError]);
 
   // Directory tree: initial load + polling every 3s for drive changes
