@@ -22,7 +22,7 @@ import {
   BookImage,
   ChevronDown,
 } from "lucide-react";
-import type { DirectoryEntry, Photo } from "../../types";
+import type { DirectoryEntry } from "../../types";
 
 // ==================== Tree Node ====================
 interface TreeNode {
@@ -52,7 +52,6 @@ export function LeftPanel() {
   const [treeLoading, setTreeLoading] = useState(false);
 
   const navRef = useRef(0);
-  const photoCacheRef = useRef(new Map<string, Photo[]>());
 
   const expandNode = useCallback(async (node: TreeNode) => {
     if (node.children !== null) {
@@ -86,13 +85,6 @@ export function LeftPanel() {
     setSelectedAlbumId(null);
 
     const navId = ++navRef.current;
-    const cache = photoCacheRef.current;
-
-    const cached = cache.get(node.path);
-    if (cached) {
-      setPhotos(cached);
-      return;
-    }
 
     setPhotos([]);
     setLoading(true);
