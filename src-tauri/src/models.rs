@@ -18,6 +18,8 @@ pub struct Photo {
     pub media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_cache_path: Option<String>,
 
     // EXIF
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -73,6 +73,7 @@ export const mockPhotos: Photo[] = cameras.map((cam, i) => ({
   fileDate: Date.now() - i * 3600 * 1000,
   mediaType: i % 3 === 0 ? "jpeg" : "raw",
   thumbnailUrl: placeholderThumb(colors[i], `${cam.model} · ${lenses[i].split(" ").slice(0, 2).join(" ")}`),
+  thumbnailCachePath: "",
 
   dateTaken: `2026-06-${String((i % 15) + 1).padStart(2, "0")}T${String(8 + i % 14).padStart(2, "0")}:${String(i * 3 % 60).padStart(2, "0")}:00`,
   cameraMake: cam.make,

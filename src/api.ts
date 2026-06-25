@@ -24,6 +24,7 @@ export function normalizePhoto(raw: Record<string, unknown>): Photo {
     fileDate: (raw.fileDate ?? raw.file_date ?? 0) as number,
     mediaType: (raw.mediaType ?? raw.media_type ?? "") as string,
     thumbnailUrl: (raw.thumbnailUrl ?? raw.thumbnail_url ?? "") as string || "",
+    thumbnailCachePath: (raw.thumbnailCachePath ?? raw.thumbnail_cache_path ?? "") as string || "",
     dateTaken: (raw.dateTaken ?? raw.date_taken ?? "") as string || "",
     cameraMake: (raw.cameraMake ?? raw.camera_make ?? "") as string || "",
     cameraModel: (raw.cameraModel ?? raw.camera_model ?? "") as string || "",

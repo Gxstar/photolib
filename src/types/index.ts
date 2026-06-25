@@ -6,6 +6,7 @@ export interface Photo {
   fileDate: number;
   mediaType: string;
   thumbnailUrl: string;
+  thumbnailCachePath: string;
 
   // EXIF core
   dateTaken: string;

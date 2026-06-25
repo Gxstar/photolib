@@ -63,7 +63,7 @@ function cacheSet(id: number, state: ThumbState): void {
 
 const inflightRequests = new Map<number, Promise<ThumbState>>();
 
-async function requestThumbnail(id: number, filePath: string, mediaType: string): Promise<ThumbState> {
+async function requestThumbnail(id: number, filePath: string, mediaType: string, cachedPath?: string): Promise<ThumbState> {
   const cached = cacheGet(id);
   if (cached) return cached;
 
@@ -71,6 +71,10 @@ async function requestThumbnail(id: number, filePath: string, mediaType: string)
   if (inflight) return inflight;
 
   const promise = (async (): Promise<ThumbState> => {
+    // NEW: skeleton-provided cache path — skip IPC entirely
+    if (cachedPath) {
+      return { src: convertFileSrc(cachedPath), error: false };
+    }
     const slow = isSlowFormat(mediaType);
     try {
       await acquireSlot(slow);
@@ -265,7 +269,7 @@ const ThumbnailCell = memo(function ThumbnailCell({
     let cancelled = false;
     setLoading(true);
 
-    requestThumbnail(photo.id, photo.filePath, photo.mediaType).then((result) => {
+    requestThumbnail(photo.id, photo.filePath, photo.mediaType, photo.thumbnailCachePath || undefined).then((result) => {
       if (cancelled) return;
       setImgSrc(result.src);
       setImgError(result.error);
