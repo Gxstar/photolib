@@ -19,24 +19,8 @@ pub enum ThumbLevel { L1, L2 }
 pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Vec<u8>> {
     let (tl, q) = match level { ThumbLevel::L1 => (480u32, 70u8), ThumbLevel::L2 => (1920u32, 85u8) };
 
-    // RAW files → rawler directly, skip 2MB head read
-    if is_raw_extension(source) {
-        return try_rawler_thumbnail(source, tl, q);
-    }
-
-    // Non-RAW paths: read head once, try JPEG EXIF then ISOBMFF
-    if let Ok(head) = read_file_head(source) {
-        if let Some(j) = extract_exif_thumbnail_jpeg(&head) {
-            if let Ok(d) = decode_resize_encode(j, tl, q) { return Ok(d); }
-        }
-        if head.len() >= 12 && &head[4..8] == b"ftyp" {
-            if let Some(j) = scan_jpeg_in_file(&head, 0, 512*1024) {
-                return decode_resize_encode(j, tl, q);
-            }
-        }
-    }
-
-    // 2.5. Windows Shell thumbnail cache (IShellItemImageFactory) — fast warm-cache path for slow formats
+    // 1. Windows Shell thumbnail cache (IShellItemImageFactory) — fast warm-cache path for slow formats.
+    //    Gated on the slow-format extension list so JPG/PNG/webp don't pay the COM cost.
     #[cfg(target_os = "windows")]
     {
         let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
@@ -45,6 +29,23 @@ pub fn generate_thumbnail(source: &Path, level: ThumbLevel) -> anyhow::Result<Ve
                           | "heic" | "heif" | "avif") {
             if let Some(bytes) = crate::win_thumbcache::try_shell_thumbnail(source, tl) {
                 return Ok(bytes);
+            }
+        }
+    }
+
+    // 2. RAW files → rawler directly, skip 2MB head read
+    if is_raw_extension(source) {
+        return try_rawler_thumbnail(source, tl, q);
+    }
+
+    // 3. Non-RAW paths: read head once, try JPEG EXIF then ISOBMFF
+    if let Ok(head) = read_file_head(source) {
+        if let Some(j) = extract_exif_thumbnail_jpeg(&head) {
+            if let Ok(d) = decode_resize_encode(j, tl, q) { return Ok(d); }
+        }
+        if head.len() >= 12 && &head[4..8] == b"ftyp" {
+            if let Some(j) = scan_jpeg_in_file(&head, 0, 512*1024) {
+                return decode_resize_encode(j, tl, q);
             }
         }
     }
