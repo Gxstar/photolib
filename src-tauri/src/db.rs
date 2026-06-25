@@ -24,7 +24,10 @@ pub fn init_db(db_path: &PathBuf) -> Result<()> {
     let conn = Connection::open(db_path)?;
 
     // 开启 WAL 模式以提升并发性能
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    // 提升 max_variable_number：默认 32766 不足以支撑大型目录的 IN (?,?,...) 缓存 EXIF 查询
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA max_variable_number = 100000;"
+    )?;
 
     conn.execute_batch(
         "
