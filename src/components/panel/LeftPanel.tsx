@@ -17,11 +17,9 @@ import {
   ChevronRight,
   Plus,
   Trash2,
-  Image,
   HardDrive,
   BookImage,
   ChevronDown,
-  Settings,
 } from "lucide-react";
 import type { DirectoryEntry } from "../../types";
 
@@ -51,7 +49,7 @@ export function LeftPanel() {
 
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
-  const [showAlbumManager, setShowAlbumManager] = useState(false);
+  const [albumExpanded, setAlbumExpanded] = useState(true);
 
   const navRef = useRef(0);
 
@@ -268,8 +266,8 @@ export function LeftPanel() {
         ) : (
           <AlbumManager
             albums={albums}
-            showManager={showAlbumManager}
-            onToggle={() => setShowAlbumManager((v) => !v)}
+            albumExpanded={albumExpanded}
+            onToggleExpand={() => setAlbumExpanded((v) => !v)}
             onAdd={handleAddAlbum}
             onRemove={handleRemoveAlbum}
           />
@@ -426,41 +424,43 @@ function expandWithChildren(nodes: TreeNode[], targetPath: string, children: Tre
 }
 
 // ==================== Album Manager ====================
-function AlbumManager({
+export function AlbumManager({
   albums,
-  showManager,
-  onToggle,
+  albumExpanded,
+  onToggleExpand,
   onAdd,
   onRemove,
 }: {
   albums: { id: number; path: string; displayName?: string; photoCount?: number }[];
-  showManager: boolean;
-  onToggle: () => void;
+  albumExpanded: boolean;
+  onToggleExpand: () => void;
   onAdd: () => void;
   onRemove: (id: number, e: React.MouseEvent) => void;
 }) {
+  const totalPhotos = albums.reduce((sum, a) => sum + (a.photoCount || 0), 0);
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center px-3 py-2.5 border-b border-surface-200/50 dark:border-surface-200/20 shrink-0">
-        <button onClick={onToggle}
-          className={`flex items-center gap-1.5 px-3 py-2 text-xs rounded-xl transition-all duration-200 w-full font-medium ${
-            showManager
-              ? "bg-accent-500/10 text-accent-600 dark:text-accent-400"
-              : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 hover:bg-surface-100/70 dark:hover:bg-surface-100/40"
-          }`}>
-          <Settings size={14} />
-          管理目录
-          <ChevronDown size={12} className={`ml-auto transition-transform ${showManager ? "rotate-180" : ""}`} />
-        </button>
+      {/* Album header — always visible */}
+      <div
+        className="flex items-center gap-2 px-3 py-2.5 border-b border-surface-200/50 dark:border-surface-200/20 shrink-0 cursor-pointer select-none"
+        onClick={onToggleExpand}
+      >
+        <BookImage size={16} className="text-accent-500 shrink-0" />
+        <span className="flex-1 text-sm font-medium text-surface-700 dark:text-surface-300">总相册</span>
+        <span className="text-2xs text-surface-400 tabular-nums font-medium">{totalPhotos} 张</span>
+        <ChevronDown size={14} className={`text-surface-400 transition-transform ${albumExpanded ? "" : "-rotate-90"}`} />
       </div>
 
-      {showManager && (
+      {/* Directory list — conditionally visible */}
+      {albumExpanded && (
         <div className="flex-1 overflow-auto py-1.5 px-1.5 space-y-0.5">
           {albums.length > 0 ? (
             albums.map((album) => (
               <div key={album.id}
-                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs group text-surface-600 dark:text-surface-400">
-                <Image size={15} className="text-surface-400 shrink-0" />
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs group text-surface-600 dark:text-surface-400"
+                style={{ paddingLeft: 8 + 16 }}>
+                <Folder size={15} className="text-surface-400 shrink-0" />
                 <span className="flex-1 truncate">{album.displayName || album.path}</span>
                 <span className="text-2xs text-surface-400 shrink-0 tabular-nums font-medium">{album.photoCount || 0}</span>
                 <button onClick={(e) => onRemove(album.id, e)}
@@ -481,18 +481,6 @@ function AlbumManager({
           <button onClick={onAdd}
             className="flex items-center gap-1.5 px-3 py-2.5 text-xs text-accent-600 dark:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-colors w-full font-medium mt-1">
             <Plus size={14} />添加文件夹
-          </button>
-        </div>
-      )}
-
-      {!showManager && albums.length === 0 && (
-        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-surface-400">
-          <div className="w-12 h-12 rounded-2xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">
-            <BookImage size={22} strokeWidth={1.5} className="text-surface-400" />
-          </div>
-          <span className="text-xs">还没有添加任何目录</span>
-          <button onClick={onAdd} className="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-700 dark:hover:text-accent-300 transition-colors font-medium bg-accent-500/10 hover:bg-accent-500/20 px-4 py-1.5 rounded-full">
-            + 选择文件夹
           </button>
         </div>
       )}
