@@ -30,6 +30,18 @@ pub fn run() {
 
             db::init_db(&db_path.clone())?;
             db::set_db_path(db_path.clone());
+
+            // 注册用户照片目录到资产协议 scope（预览原图直读）
+            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                if let Ok(mut stmt) = conn.prepare("SELECT path FROM folders") {
+                    if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                        for p in rows.filter_map(|r| r.ok()) {
+                            let _ = app.asset_protocol_scope().allow_directory(&p, true);
+                        }
+                    }
+                }
+            }
+
             app.manage(db::AppDatabase { path: db_path });
 
             app.manage(watchdog::Watchdog::new());
@@ -55,6 +67,7 @@ pub fn run() {
             commands::extract_exif_for,
             commands::get_thumbnail,
             commands::get_thumbnail_path,
+            commands::get_preview_image,
             commands::preload_thumbnails,
             commands::get_all_album_photos,
             commands::get_albums,

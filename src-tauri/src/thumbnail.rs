@@ -258,6 +258,11 @@ pub fn get_cache_path(file_path: &str) -> PathBuf {
     fs::create_dir_all(&dir).ok();
     dir.join(format!("v7_{:016x}.jpg", xxhash_rust::xxh3::xxh3_64(file_path.as_bytes())))
 }
+pub fn get_cache_path_l2(file_path: &str) -> PathBuf {
+    let dir = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("photolib").join("thumbs");
+    fs::create_dir_all(&dir).ok();
+    dir.join(format!("v7_{:016x}_l2.jpg", xxhash_rust::xxh3::xxh3_64(file_path.as_bytes())))
+}
 pub fn get_thumbnail_cache_path(source: &Path) -> PathBuf { get_cache_path(&source.to_string_lossy()) }
 
 pub fn cache_is_valid(source: &Path, cache: &Path) -> bool {
@@ -271,7 +276,10 @@ pub fn cache_is_valid(source: &Path, cache: &Path) -> bool {
 }
 
 pub fn generate_and_cache(source: &Path, level: ThumbLevel) -> anyhow::Result<PathBuf> {
-    let cp = get_cache_path(&source.to_string_lossy());
+    let cp = match level {
+        ThumbLevel::L1 => get_cache_path(&source.to_string_lossy()),
+        ThumbLevel::L2 => get_cache_path_l2(&source.to_string_lossy()),
+    };
     if cache_is_valid(source, &cp) { return Ok(cp); }
     fs::write(&cp, generate_thumbnail(source, level)?)?;
     Ok(cp)

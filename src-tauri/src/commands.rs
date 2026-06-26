@@ -3,7 +3,7 @@
 use crate::models::Photo;
 use crate::scanner;
 use crate::watchdog::Watchdog;
-use tauri::{State, Emitter};
+use tauri::{Manager, State, Emitter};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -662,6 +662,7 @@ pub async fn get_albums(
 pub async fn add_album(
     folder_path: String,
     db: State<'_, crate::db::AppDatabase>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
 
@@ -674,6 +675,10 @@ pub async fn add_album(
         "INSERT OR IGNORE INTO folders (path, display_name) VALUES (?1, ?2)",
         rusqlite::params![folder_path, name],
     ).map_err(|e| e.to_string())?;
+
+    // 注册到资产协议 scope（预览用）
+    let fp = folder_path.clone();
+    let _ = app.asset_protocol_scope().allow_directory(&fp, true);
 
     Ok(())
 }
@@ -1121,6 +1126,26 @@ pub async fn get_thumbnail_path(
             .map_err(|e| {
                 eprintln!("[PhotoLib::get_thumbnail_path] FAILED for {:?}: {:#}", path, e);
                 format!("缩略图生成失败: {}", e)
+            })
+    }).await.map_err(|e| format!("join error: {}", e))?
+}
+
+/// 生成大图预览（L2 1920px JPEG），返回磁盘缓存路径
+#[tauri::command]
+pub async fn get_preview_image(
+    file_path: String,
+) -> Result<String, String> {
+    let path = std::path::PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err("文件不存在".to_string());
+    }
+
+    tokio::task::spawn_blocking(move || {
+        crate::thumbnail::generate_and_cache(&path, crate::thumbnail::ThumbLevel::L2)
+            .map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| {
+                eprintln!("[PhotoLib::get_preview_image] FAILED for {:?}: {:#}", path, e);
+                format!("预览图生成失败: {}", e)
             })
     }).await.map_err(|e| format!("join error: {}", e))?
 }
