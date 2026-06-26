@@ -5,11 +5,11 @@ import {
   openDirectory,
   preloadThumbnails,
   extractExifFor,
-  getPhotosByFolderDeep,
   getAlbums,
   addAlbum,
   removeAlbum,
   isTauri,
+  getAllAlbumPhotos,
 } from "../../api";
 import {
   Folder,
@@ -21,6 +21,7 @@ import {
   HardDrive,
   BookImage,
   ChevronDown,
+  Settings,
 } from "lucide-react";
 import type { DirectoryEntry } from "../../types";
 
@@ -44,12 +45,13 @@ export function LeftPanel() {
     setLoading,
     albums,
     setAlbums,
-    selectedAlbumId,
     setSelectedAlbumId,
+    setCurrentFolder,
   } = useAppStore();
 
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
+  const [showAlbumManager, setShowAlbumManager] = useState(false);
 
   const navRef = useRef(0);
 
@@ -180,24 +182,34 @@ export function LeftPanel() {
     catch (err) { console.error("getAlbums error:", err); }
   }, [setAlbums]);
 
-  const selectAlbum = useCallback(async (album: { id: number; path: string }) => {
-    setSelectedAlbumId(album.id);
-    setCurrentDir(album.path);
-    setPhotos([]);
-
-    const navId = ++navRef.current;
+  // Album tab: load all photos from all added directories
+  const loadAllAlbumPhotos = useCallback(async () => {
+    setLoading(true);
     try {
-      const photos = await getPhotosByFolderDeep(album.path);
-      if (navId !== navRef.current) return;
+      const photos = await getAllAlbumPhotos();
       setPhotos(photos);
     } catch (err) {
-      if (navId !== navRef.current) return;
-      console.error("selectAlbum error:", err);
+      console.error("getAllAlbumPhotos error:", err);
       setError("加载相册照片失败");
+    } finally {
+      setLoading(false);
     }
-  }, [setSelectedAlbumId, setCurrentDir, setPhotos, setError]);
+  }, [setPhotos, setLoading, setError]);
 
-  useEffect(() => { if (leftTab === "album") loadAlbums(); }, [leftTab]);
+  // Album tab activation: load photos + album list, clear dir state
+  useEffect(() => {
+    if (leftTab !== "album") return;
+    setCurrentDir("");
+    setCurrentFolder("总相册");
+    setSelectedAlbumId(null);
+    loadAllAlbumPhotos();
+    loadAlbums();
+  }, [leftTab, loadAllAlbumPhotos, loadAlbums, setCurrentDir, setCurrentFolder, setSelectedAlbumId]);
+
+  const refreshAlbumPhotos = useCallback(async () => {
+    await loadAllAlbumPhotos();
+    await loadAlbums();
+  }, [loadAllAlbumPhotos, loadAlbums]);
 
   const handleAddAlbum = async () => {
     if (isTauri()) {
@@ -206,12 +218,12 @@ export function LeftPanel() {
         const selected = await open({ directory: true, title: "选择要添加的文件夹" });
         if (selected && typeof selected === "string") {
           await addAlbum(selected);
-          await loadAlbums();
+          await refreshAlbumPhotos();
         }
       } catch (err) { console.error("addAlbum error:", err); }
     } else {
       const path = prompt("输入文件夹路径：");
-      if (path) { await addAlbum(path); await loadAlbums(); }
+      if (path) { await addAlbum(path); await refreshAlbumPhotos(); }
     }
   };
 
@@ -219,8 +231,7 @@ export function LeftPanel() {
     e.stopPropagation();
     if (confirm("确定要移除此相册？")) {
       await removeAlbum(id);
-      await loadAlbums();
-      if (selectedAlbumId === id) setSelectedAlbumId(null);
+      await refreshAlbumPhotos();
     }
   };
 
@@ -255,10 +266,10 @@ export function LeftPanel() {
             onSelect={selectNode}
           />
         ) : (
-          <AlbumTab
+          <AlbumManager
             albums={albums}
-            selectedAlbumId={selectedAlbumId}
-            onSelect={selectAlbum}
+            showManager={showAlbumManager}
+            onToggle={() => setShowAlbumManager((v) => !v)}
             onAdd={handleAddAlbum}
             onRemove={handleRemoveAlbum}
           />
@@ -414,58 +425,77 @@ function expandWithChildren(nodes: TreeNode[], targetPath: string, children: Tre
   });
 }
 
-// ==================== Album Tab ====================
-function AlbumTab({
+// ==================== Album Manager ====================
+function AlbumManager({
   albums,
-  selectedAlbumId,
-  onSelect,
+  showManager,
+  onToggle,
   onAdd,
   onRemove,
 }: {
   albums: { id: number; path: string; displayName?: string; photoCount?: number }[];
-  selectedAlbumId: number | null;
-  onSelect: (album: { id: number; path: string }) => void;
+  showManager: boolean;
+  onToggle: () => void;
   onAdd: () => void;
   onRemove: (id: number, e: React.MouseEvent) => void;
 }) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center px-3 py-2.5 border-b border-surface-200/50 dark:border-surface-200/20 shrink-0">
-        <button onClick={onAdd}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs text-accent-600 dark:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-colors w-full font-medium">
-          <Plus size={14} />添加文件夹
+        <button onClick={onToggle}
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs rounded-xl transition-all duration-200 w-full font-medium ${
+            showManager
+              ? "bg-accent-500/10 text-accent-600 dark:text-accent-400"
+              : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 hover:bg-surface-100/70 dark:hover:bg-surface-100/40"
+          }`}>
+          <Settings size={14} />
+          管理目录
+          <ChevronDown size={12} className={`ml-auto transition-transform ${showManager ? "rotate-180" : ""}`} />
         </button>
       </div>
-      <div className="flex-1 overflow-auto py-1.5 px-1.5 space-y-0.5">
-        {albums.length > 0 ? (
-          albums.map((album) => (
-            <div key={album.id} onClick={() => onSelect(album)}
-              className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-200 text-xs group ${
-                selectedAlbumId === album.id
-                  ? "bg-accent-500/10 text-accent-600 dark:text-accent-400 font-medium"
-                  : "text-surface-600 dark:text-surface-400 hover:bg-surface-100/70 dark:hover:bg-surface-100/40"
-              }`}>
-              <Image size={15} className="text-surface-400 shrink-0" />
-              <span className="flex-1 truncate">{album.displayName || album.path}</span>
-              <span className="text-2xs text-surface-400 shrink-0 tabular-nums font-medium">{album.photoCount || 0}</span>
-              <button onClick={(e) => onRemove(album.id, e)}
-                className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 text-surface-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all shrink-0">
-                <Trash2 size={12} />
-              </button>
+
+      {showManager && (
+        <div className="flex-1 overflow-auto py-1.5 px-1.5 space-y-0.5">
+          {albums.length > 0 ? (
+            albums.map((album) => (
+              <div key={album.id}
+                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs group text-surface-600 dark:text-surface-400">
+                <Image size={15} className="text-surface-400 shrink-0" />
+                <span className="flex-1 truncate">{album.displayName || album.path}</span>
+                <span className="text-2xs text-surface-400 shrink-0 tabular-nums font-medium">{album.photoCount || 0}</span>
+                <button onClick={(e) => onRemove(album.id, e)}
+                  className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 text-surface-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all shrink-0">
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className="flex flex-col items-center justify-center py-8 gap-3 text-surface-400">
+              <div className="w-10 h-10 rounded-xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">
+                <BookImage size={18} strokeWidth={1.5} className="text-surface-400" />
+              </div>
+              <span className="text-xs">还没有添加任何目录</span>
             </div>
-          ))
-        ) : (
-          <div className="flex flex-col items-center justify-center py-12 gap-3 text-surface-400">
-            <div className="w-12 h-12 rounded-2xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">
-              <BookImage size={22} strokeWidth={1.5} className="text-surface-400" />
-            </div>
-            <span className="text-xs">暂无相册</span>
-            <button onClick={onAdd} className="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-700 dark:hover:text-accent-300 transition-colors font-medium bg-accent-500/10 hover:bg-accent-500/20 px-4 py-1.5 rounded-full">
-              + 添加照片文件夹
-            </button>
+          )}
+
+          <button onClick={onAdd}
+            className="flex items-center gap-1.5 px-3 py-2.5 text-xs text-accent-600 dark:text-accent-400 hover:bg-accent-500/10 rounded-xl transition-colors w-full font-medium mt-1">
+            <Plus size={14} />添加文件夹
+          </button>
+        </div>
+      )}
+
+      {!showManager && albums.length === 0 && (
+        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-surface-400">
+          <div className="w-12 h-12 rounded-2xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">
+            <BookImage size={22} strokeWidth={1.5} className="text-surface-400" />
           </div>
-        )}
-      </div>
+          <span className="text-xs">还没有添加任何目录</span>
+          <button onClick={onAdd} className="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-700 dark:hover:text-accent-300 transition-colors font-medium bg-accent-500/10 hover:bg-accent-500/20 px-4 py-1.5 rounded-full">
+            + 选择文件夹
+          </button>
+        </div>
+      )}
     </div>
   );
 }

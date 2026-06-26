@@ -143,6 +143,13 @@ export async function getPhotosByFolder(folderPath: string): Promise<Photo[]> {
   return photos;
 }
 
+/// 获取所有相册目录下的全部照片（合并总相册视图）
+export async function getAllAlbumPhotos(): Promise<Photo[]> {
+  const invoke = await getInvoke();
+  const raw = await invoke<Record<string, unknown>[]>("get_all_album_photos");
+  return raw.map(normalizePhoto);
+}
+
 /// 获取所有相册
 export async function getAlbums(): Promise<Folder[]> {
   const invoke = await getInvoke();

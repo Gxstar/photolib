@@ -214,7 +214,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Left panel
-  leftTab: "directory",
+  leftTab: "album",
   setLeftTab: (tab) => set({ leftTab: tab }),
 
   // Directory browser

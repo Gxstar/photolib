@@ -548,6 +548,82 @@ pub async fn get_photos_by_folder_deep(
     Ok(photos)
 }
 
+/// 获取所有已添加目录下的全部照片（合并视图）
+#[tauri::command]
+pub async fn get_all_album_photos(
+    db: State<'_, crate::db::AppDatabase>,
+) -> Result<Vec<Photo>, String> {
+    let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, file_path, file_name, file_size, file_hash, file_date, media_type,
+                         date_taken, camera_make, camera_model, lens_model,
+                         focal_length, aperture, shutter_speed, iso,
+                         exposure_comp, flash, white_balance, metering_mode,
+                         image_width, image_height, color_space,
+                         latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
+                         rating, color_label, flag, notes
+                  FROM photos
+                  WHERE EXISTS (SELECT 1 FROM folders f WHERE photos.file_path LIKE f.path || '%')
+                  ORDER BY date_taken DESC")
+        .map_err(|e| e.to_string())?;
+
+    let photos: Vec<Photo> = stmt
+        .query_map([], |row| {
+            Ok(Photo {
+                id: row.get(0)?,
+                file_path: row.get(1)?,
+                file_name: row.get(2)?,
+                file_size: row.get(3)?,
+                file_hash: row.get(4)?,
+                file_date: row.get(5)?,
+                media_type: row.get(6)?,
+                thumbnail_url: None,
+                thumbnail_cache_path: None,
+                date_taken: row.get(7)?,
+                camera_make: row.get(8)?,
+                camera_model: row.get(9)?,
+                lens_model: row.get(10)?,
+                focal_length: row.get(11)?,
+                aperture: row.get(12)?,
+                shutter_speed: row.get(13)?,
+                iso: row.get(14)?,
+                exposure_comp: row.get(15)?,
+                flash: row.get(16)?,
+                white_balance: row.get(17)?,
+                metering_mode: row.get(18)?,
+                image_width: row.get(19)?,
+                image_height: row.get(20)?,
+                color_space: row.get(21)?,
+                latitude: row.get(22)?,
+                longitude: row.get(23)?,
+                altitude: row.get(24)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(photos)
+}
+
 /// 获取所有已添加的文件夹（相册列表）
 #[tauri::command]
 pub async fn get_albums(

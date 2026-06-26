@@ -56,6 +56,7 @@ pub fn run() {
             commands::get_thumbnail,
             commands::get_thumbnail_path,
             commands::preload_thumbnails,
+            commands::get_all_album_photos,
             commands::get_albums,
             commands::add_album,
             commands::remove_album,
