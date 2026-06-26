@@ -126,7 +126,7 @@ interface ThumbnailGridProps {
 }
 
 export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
-  const { isLoading, selectedIds, toggleSelect, thumbnailSize, setThumbnailSize, setPreviewPhotoId } = useAppStore();
+  const { isLoading, selectedIds, toggleSelect, thumbnailSize, setThumbnailSize } = useAppStore();
 
   // 用 pathKey 而非 photos 引用 — 修复 EXIF 补丁触发 cancelAllPending 的 bug
   const pathKey = useMemo(
@@ -283,7 +283,7 @@ const ThumbnailCell = memo(function ThumbnailCell({
   return (
     <div
       onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
-      onDoubleClick={() => setPreviewPhotoId(photo.id)}
+      onDoubleClick={() => useAppStore.getState().setPreviewPhotoId(photo.id)}
       className={`thumb-cell ${selected ? "selected" : ""}`}
       style={{ width: cellSize, height: cellSize }}
     >
