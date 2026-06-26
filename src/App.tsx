@@ -6,7 +6,6 @@ import { LeftPanel } from "./components/panel/LeftPanel";
 import { FilterPanel } from "./components/panel/FilterPanel";
 import { MetadataPanel } from "./components/panel/MetadataPanel";
 import { ThumbnailGrid } from "./components/browser/ThumbnailGrid";
-import { PhotoPreview } from "./components/browser/PhotoPreview";
 import { watchDirectory, unwatchDirectory, isTauri } from "./api";
 
 export default function App() {
@@ -22,8 +21,6 @@ export default function App() {
     setTheme,
     currentDir,
     leftTab,
-    previewPhotoId,
-    setPreviewPhotoId,
   } = useAppStore();
 
   useEffect(() => {
@@ -120,11 +117,6 @@ export default function App() {
       </div>
 
       <StatusBar />
-
-      <PhotoPreview
-        photos={filteredPhotos}
-        onClose={() => setPreviewPhotoId(null)}
-      />
     </div>
   );
 }

@@ -48,6 +48,7 @@ interface AppState {
   photos: Photo[];
   setPhotos: (photos: Photo[]) => void;
   patchPhotos: (patches: ExifPatch[]) => void;
+  updatePhotoMeta: (photoId: number, partial: Partial<Photo>) => void;
 
   // Theme
   theme: "light" | "dark";
@@ -91,10 +92,6 @@ interface AppState {
   filter: FilterState;
   setFilter: (filter: Partial<FilterState>) => void;
   resetFilter: () => void;
-
-  // Photo preview
-  previewPhotoId: number | null;
-  setPreviewPhotoId: (id: number | null) => void;
 
   // Panels
   leftPanelOpen: boolean;
@@ -194,6 +191,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return mutated ? { photos: next } : s;
     });
   },
+  updatePhotoMeta: (photoId, partial) => set((s) => ({
+    photos: s.photos.map((p) =>
+      p.id === photoId ? { ...p, ...partial } : p
+    ),
+  })),
 
   // Theme
   theme: getInitialTheme(),
@@ -277,9 +279,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFilter: (partial) =>
     set((s) => ({ filter: { ...s.filter, ...partial } })),
   resetFilter: () => set({ filter: { ...defaultFilter } }),
-
-  previewPhotoId: null,
-  setPreviewPhotoId: (id) => set({ previewPhotoId: id }),
 
   leftPanelOpen: true,
   rightPanelOpen: true,
