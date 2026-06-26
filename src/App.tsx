@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "./stores/appStore";
 import { Toolbar } from "./components/layout/Toolbar";
 import { StatusBar } from "./components/layout/StatusBar";
@@ -6,9 +6,29 @@ import { LeftPanel } from "./components/panel/LeftPanel";
 import { FilterPanel } from "./components/panel/FilterPanel";
 import { MetadataPanel } from "./components/panel/MetadataPanel";
 import { ThumbnailGrid } from "./components/browser/ThumbnailGrid";
+import { PhotoDetail } from "./components/browser/PhotoDetail";
 import { watchDirectory, unwatchDirectory, isTauri } from "./api";
 
+function useHashDetail(): boolean {
+  const [isDetail, setIsDetail] = useState(
+    () => window.location.hash.startsWith("#/photo/"),
+  );
+  useEffect(() => {
+    const handler = () => setIsDetail(window.location.hash.startsWith("#/photo/"));
+    window.addEventListener("hashchange", handler);
+    return () => window.removeEventListener("hashchange", handler);
+  }, []);
+  return isDetail;
+}
+
 export default function App() {
+  const isDetail = useHashDetail();
+
+  // New Tauri window: detail page (hash routing)
+  if (isDetail) {
+    return <PhotoDetail />;
+  }
+
   const {
     error,
     leftPanelOpen,

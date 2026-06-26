@@ -60,6 +60,18 @@ listen("photos-skeleton", (event) => {
   useAppStore.getState().setLoading(false);
 });
 
+// 监听照片标记更新（详情窗口编辑后同步到主窗口）
+listen("photo-updated", (event) => {
+  const data = event.payload as { id: number; rating?: number; colorLabel?: string; flag?: string; notes?: string };
+  if (!data || !data.id) return;
+  useAppStore.getState().updatePhotoMeta(data.id, {
+    rating: data.rating ?? 0,
+    colorLabel: data.colorLabel ?? "",
+    flag: data.flag ?? "",
+    notes: data.notes ?? "",
+  });
+});
+
 // 监听目录文件变化 — 文件增删时自动重新加载
 listen("files-changed", (event) => {
   const changedDir = event.payload as string;

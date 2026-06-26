@@ -204,6 +204,37 @@ export async function preloadThumbnails(folderPath: string): Promise<number> {
   return invoke<number>("preload_thumbnails", { folderPath });
 }
 
+/// 打开/聚焦照片详情窗口
+export async function openPhotoDetailWindow(photoId: number): Promise<void> {
+  const invoke = await getInvoke();
+  return invoke<void>("open_photo_detail_window", { photoId });
+}
+
+/// 获取全部照片（用于详情窗口全局导航）
+export async function getAllPhotos(): Promise<Photo[]> {
+  const invoke = await getInvoke();
+  const raw = await invoke<Record<string, unknown>[]>("get_all_photos");
+  return raw.map(normalizePhoto);
+}
+
+/// 更新照片标记（评分、颜色标签、旗、备注）
+export async function updatePhotoMeta(args: {
+  photoId: number;
+  rating?: number;
+  colorLabel?: string;
+  flag?: string;
+  notes?: string;
+}): Promise<void> {
+  const invoke = await getInvoke();
+  return invoke<void>("update_photo_meta", {
+    photoId: args.photoId,
+    rating: args.rating,
+    colorLabel: args.colorLabel,
+    flag: args.flag,
+    notes: args.notes,
+  });
+}
+
 /// 监听目录文件变化 — 通过 notify 实时推送
 export async function watchDirectory(path: string): Promise<void> {
   const invoke = await getInvoke();

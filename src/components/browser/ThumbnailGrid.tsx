@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, memo, useRef, useMemo } from "react";
 import { useAppStore } from "../../stores/appStore";
 import type { Photo } from "../../types";
 import { Star, Flag, ImageOff, ZoomIn, ZoomOut, Images } from "lucide-react";
-import { getThumbnailPath, isTauri } from "../../api";
+import { getThumbnailPath, isTauri, openPhotoDetailWindow } from "../../api";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { VirtuosoGrid } from "react-virtuoso";
 import { invoke } from "@tauri-apps/api/core";
@@ -283,7 +283,11 @@ const ThumbnailCell = memo(function ThumbnailCell({
   return (
     <div
       onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
-      onDoubleClick={() => useAppStore.getState().setPreviewPhotoId(photo.id)}
+      onDoubleClick={() => {
+        if (isTauri()) {
+          openPhotoDetailWindow(photo.id).catch(() => {});
+        }
+      }}
       className={`thumb-cell ${selected ? "selected" : ""}`}
       style={{ width: cellSize, height: cellSize }}
     >
