@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "../../stores/appStore";
+import { RotateCcw, RotateCw } from "lucide-react";
 import {
   getAllPhotos,
   getPreviewImage,
@@ -32,7 +33,9 @@ function ExifTable({ photo }: { photo: Photo }) {
     ["文件名", photo.fileName],
     ["路径", photo.filePath],
     ["大小", formatBytes(photo.fileSize)],
-    ["尺寸", `${photo.imageWidth || "-"} × ${photo.imageHeight || "-"}`],
+    ...(photo.imageWidth && photo.imageHeight
+      ? [["尺寸", `${photo.imageWidth} × ${photo.imageHeight}` as string] as [string, string]]
+      : []),
     ["相机", [photo.cameraMake, photo.cameraModel].filter(Boolean).join(" ")],
     ["镜头", photo.lensModel],
     ["焦距", photo.focalLength ? `${photo.focalLength}mm` : ""],
@@ -328,18 +331,12 @@ export function PhotoDetail() {
         </button>
         <span className="text-sm text-white/80 truncate flex-1">{currentPhoto.fileName}</span>
         <button onClick={() => setRotation((r) => r - 90)}
-          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="逆时针旋转">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M1 4v6h6M23 20v-6h-6" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
-          </svg>
+          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="逆时针旋转 (R)">
+          <RotateCcw size={16} />
         </button>
         <button onClick={() => setRotation((r) => r + 90)}
-          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="顺时针旋转">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M23 4v6h-6M1 20v-6h6" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-          </svg>
+          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="顺时针旋转 (Shift+R)">
+          <RotateCw size={16} />
         </button>
       </div>
 
@@ -354,12 +351,12 @@ export function PhotoDetail() {
             wheel={{ step: 0.1 }}
             centerOnInit
           >
-            <TransformComponent wrapperClass="!w-full !h-full" contentClass="!flex !items-center !justify-center">
+            <TransformComponent wrapperClass="!w-full !h-full" contentClass="!w-full !h-full">
               <img
                 src={imgSrc}
                 alt={currentPhoto.fileName}
                 style={{ transform: `rotate(${rotation}deg)`, transition: "transform 0.2s" }}
-                className="max-w-full max-h-full object-contain select-none"
+                className="w-full h-full object-contain select-none"
                 draggable={false}
                 onError={handleImgError}
               />
@@ -368,7 +365,7 @@ export function PhotoDetail() {
         </div>
 
         {/* Side panel — EXIF + edit */}
-        <div className="w-[320px] shrink-0 border-l border-white/5 overflow-y-auto bg-surface-900/80 backdrop-blur-xl">
+        <div className="w-[360px] shrink-0 border-l border-white/5 overflow-y-auto bg-surface-900/80 backdrop-blur-xl">
           <div className="p-4 space-y-5">
             <section>
               <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">EXIF 信息</h3>
