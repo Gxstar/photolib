@@ -220,22 +220,17 @@ export function PhotoDetail() {
 
   // Auto-save: debounce 400ms on form changes
   const doSave = useCallback(
-    (r: number, cl: string, f: string, n: string) => {
+    async (r: number, cl: string, f: string, n: string) => {
       if (!photoId || !isTauri()) return;
       const serialized = `${r}|${cl}|${f}|${n}`;
       if (serialized === lastSavedRef.current) return;
-      updatePhotoMeta({ photoId, rating: r, colorLabel: cl, flag: f, notes: n })
-        .then(() => {
-          lastSavedRef.current = serialized;
-          // Sync to main window store
-          updateStore(photoId, {
-            rating: r,
-            colorLabel: cl,
-            flag: f,
-            notes: n,
-          });
-        })
-        .catch(console.error);
+      try {
+        await updatePhotoMeta({ photoId, rating: r, colorLabel: cl, flag: f, notes: n });
+        lastSavedRef.current = serialized;
+        updateStore(photoId, { rating: r, colorLabel: cl, flag: f, notes: n });
+      } catch (err) {
+        console.error(err);
+      }
     },
     [photoId, updateStore],
   );
