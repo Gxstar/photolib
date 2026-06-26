@@ -185,6 +185,12 @@ export async function getThumbnailPath(filePath: string): Promise<string> {
   return invoke<string>("get_thumbnail_path", { filePath });
 }
 
+/// 生成大图预览（L2 1920px JPEG），返回磁盘缓存路径
+export async function getPreviewImage(filePath: string): Promise<string> {
+  const invoke = await getInvoke();
+  return invoke<string>("get_preview_image", { filePath });
+}
+
 /// 视口优先 EXIF 提取 — 前端 scroll 时调用
 /// 内部走 exif_pool 优先队列，worker 完成时 emit "exif-updated" 事件
 export async function extractExifFor(paths: string[]): Promise<number> {

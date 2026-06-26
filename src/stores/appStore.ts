@@ -92,6 +92,10 @@ interface AppState {
   setFilter: (filter: Partial<FilterState>) => void;
   resetFilter: () => void;
 
+  // Photo preview
+  previewPhotoId: number | null;
+  setPreviewPhotoId: (id: number | null) => void;
+
   // Panels
   leftPanelOpen: boolean;
   rightPanelOpen: boolean;
@@ -273,6 +277,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   setFilter: (partial) =>
     set((s) => ({ filter: { ...s.filter, ...partial } })),
   resetFilter: () => set({ filter: { ...defaultFilter } }),
+
+  previewPhotoId: null,
+  setPreviewPhotoId: (id) => set({ previewPhotoId: id }),
 
   leftPanelOpen: true,
   rightPanelOpen: true,
