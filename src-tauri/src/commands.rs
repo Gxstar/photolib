@@ -1234,3 +1234,135 @@ pub async fn unwatch_directory(
     Ok(())
 }
 
+/// 获取全部照片（不按文件夹过滤），用于详情窗口全局导航
+#[tauri::command]
+pub async fn get_all_photos(
+    db: State<'_, crate::db::AppDatabase>,
+) -> Result<Vec<Photo>, String> {
+    let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, file_path, file_name, file_size, file_hash, file_date, media_type,
+                         date_taken, camera_make, camera_model, lens_model,
+                         focal_length, aperture, shutter_speed, iso,
+                         exposure_comp, flash, white_balance, metering_mode,
+                         image_width, image_height, color_space,
+                         latitude, longitude, altitude,
+                         software, copyright, image_description, orientation,
+                         exposure_program, max_aperture, focal_length_35mm,
+                         lens_make, scene_capture_type, contrast,
+                         rating, color_label, flag, notes
+                  FROM photos ORDER BY date_taken DESC")
+        .map_err(|e| e.to_string())?;
+
+    let photos: Vec<Photo> = stmt
+        .query_map([], |row| {
+            Ok(Photo {
+                id: row.get(0)?,
+                file_path: row.get(1)?,
+                file_name: row.get(2)?,
+                file_size: row.get(3)?,
+                file_hash: row.get(4)?,
+                file_date: row.get(5)?,
+                media_type: row.get(6)?,
+                thumbnail_url: None,
+                thumbnail_cache_path: None,
+                date_taken: row.get(7)?,
+                camera_make: row.get(8)?,
+                camera_model: row.get(9)?,
+                lens_model: row.get(10)?,
+                focal_length: row.get(11)?,
+                aperture: row.get(12)?,
+                shutter_speed: row.get(13)?,
+                iso: row.get(14)?,
+                exposure_comp: row.get(15)?,
+                flash: row.get(16)?,
+                white_balance: row.get(17)?,
+                metering_mode: row.get(18)?,
+                image_width: row.get(19)?,
+                image_height: row.get(20)?,
+                color_space: row.get(21)?,
+                latitude: row.get(22)?,
+                longitude: row.get(23)?,
+                altitude: row.get(24)?,
+                software: row.get(25)?,
+                copyright: row.get(26)?,
+                image_description: row.get(27)?,
+                orientation: row.get(28)?,
+                exposure_program: row.get(29)?,
+                max_aperture: row.get(30)?,
+                focal_length_35mm: row.get(31)?,
+                lens_make: row.get(32)?,
+                scene_capture_type: row.get(33)?,
+                contrast: row.get(34)?,
+                rating: row.get(35).unwrap_or(0),
+                color_label: row.get(36)?,
+                flag: row.get(37)?,
+                notes: row.get(38)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(photos)
+}
+
+/// 打开/聚焦照片详情窗口
+#[tauri::command]
+pub async fn open_photo_detail_window(
+    photo_id: i64,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    const LABEL: &str = "photo-detail";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.set_focus();
+        let _ = window.eval(&format!("window.location.hash = '#/photo/{}'", photo_id));
+    } else {
+        tauri::WebviewWindowBuilder::new(
+            &app,
+            LABEL,
+            tauri::WebviewUrl::App(format!("index.html#/photo/{}", photo_id).into()),
+        )
+        .title("照片详情")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .build()
+        .map_err(|e| format!("打开详情窗口失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 更新照片的用户标记（评分、颜色标签、旗、备注）
+#[tauri::command]
+pub async fn update_photo_meta(
+    photo_id: i64,
+    rating: Option<i64>,
+    color_label: Option<String>,
+    flag: Option<String>,
+    notes: Option<String>,
+    db: State<'_, crate::db::AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE photos SET
+            rating      = COALESCE(?2, rating),
+            color_label = COALESCE(?3, color_label),
+            flag        = COALESCE(?4, flag),
+            notes       = COALESCE(?5, notes)
+         WHERE id = ?1",
+        rusqlite::params![photo_id, rating, color_label, flag, notes],
+    ).map_err(|e| e.to_string())?;
+
+    let _ = app.emit("photo-updated", serde_json::json!({
+        "id": photo_id,
+        "rating": rating,
+        "colorLabel": color_label,
+        "flag": flag,
+        "notes": notes,
+    }));
+
+    Ok(())
+}
+

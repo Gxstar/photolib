@@ -75,6 +75,9 @@ pub fn run() {
             commands::remove_album,
             commands::watch_directory,
             commands::unwatch_directory,
+            commands::get_all_photos,
+            commands::open_photo_detail_window,
+            commands::update_photo_meta,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PhotoLib");
