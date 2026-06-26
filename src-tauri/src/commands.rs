@@ -632,7 +632,11 @@ pub async fn get_albums(
     let conn = Connection::open(&db.path).map_err(|e| e.to_string())?;
 
     let mut stmt = conn
-        .prepare("SELECT * FROM folders ORDER BY path")
+        .prepare(
+            "SELECT f.id, f.path, f.display_name, f.last_scan,
+               (SELECT COUNT(*) FROM photos p WHERE p.file_path LIKE f.path || '%') AS photo_count
+             FROM folders f ORDER BY f.path"
+        )
         .map_err(|e| e.to_string())?;
 
     let folders = stmt
@@ -641,8 +645,8 @@ pub async fn get_albums(
                 id: row.get(0)?,
                 path: row.get(1)?,
                 display_name: row.get(2)?,
-                photo_count: row.get(3)?,
-                last_scan: row.get(4)?,
+                last_scan: row.get(3)?,
+                photo_count: row.get(4)?,
                 children: None,
             })
         })
