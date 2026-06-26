@@ -186,6 +186,16 @@ export function LeftPanel() {
     try {
       const photos = await getAllAlbumPhotos();
       setPhotos(photos);
+
+      // Trigger EXIF extraction for visible photos (same pattern as selectNode)
+      const visCount = Math.ceil(window.innerHeight / 200) * Math.ceil(window.innerWidth / 200) + 10;
+      const initialVisPaths = photos
+        .slice(0, Math.min(visCount, 100))
+        .filter((p) => !p.dateTaken || p.dateTaken === "")
+        .map((p) => p.filePath);
+      if (initialVisPaths.length > 0) {
+        extractExifFor(initialVisPaths).catch(() => {});
+      }
     } catch (err) {
       console.error("getAllAlbumPhotos error:", err);
       setError("加载相册照片失败");
