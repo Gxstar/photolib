@@ -168,6 +168,7 @@ export function ThumbnailGrid({ photos }: ThumbnailGridProps) {
           <ThumbnailCell
             key={photo.id}
             photo={photo}
+            photos={photosRef.current}
             selected={selectedIds.has(photo.id)}
             onSelect={(multi) => toggleSelect(photo.id, multi)}
             cellSize={thumbnailSize}
@@ -243,11 +244,13 @@ const colorLabelMap: Record<string, string> = {
 
 const ThumbnailCell = memo(function ThumbnailCell({
   photo,
+  photos,
   selected,
   onSelect,
   cellSize,
 }: {
   photo: Photo;
+  photos: Photo[];
   selected: boolean;
   onSelect: (multi: boolean) => void;
   cellSize: number;
@@ -267,16 +270,25 @@ const ThumbnailCell = memo(function ThumbnailCell({
     }
 
     let cancelled = false;
+    let timer: number | undefined;
     setLoading(true);
+    setImgSrc("");
+    setImgError(false);
 
-    requestThumbnail(photo.id, photo.filePath, photo.mediaType, photo.thumbnailCachePath || undefined).then((result) => {
+    timer = window.setTimeout(() => {
       if (cancelled) return;
-      setImgSrc(result.src);
-      setImgError(result.error);
-      setLoading(false);
-    });
+      requestThumbnail(photo.id, photo.filePath, photo.mediaType, photo.thumbnailCachePath || undefined).then((result) => {
+        if (cancelled) return;
+        setImgSrc(result.src);
+        setImgError(result.error);
+        setLoading(false);
+      });
+    }, 100);
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photo.id, photo.filePath]);
 
@@ -285,6 +297,11 @@ const ThumbnailCell = memo(function ThumbnailCell({
       onClick={(e) => onSelect(e.ctrlKey || e.metaKey)}
       onDoubleClick={() => {
         if (isTauri()) {
+          try {
+            localStorage.setItem("photolib-detail-photos", JSON.stringify(photos.map((p) => p.id)));
+          } catch {
+            // 超大列表时可能配额不足，忽略即可
+          }
           openPhotoDetailWindow(photo.id).catch(() => {});
         }
       }}

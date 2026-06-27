@@ -41,6 +41,8 @@ export default function App() {
     setTheme,
     currentDir,
     leftTab,
+    selectedAlbumId,
+    albums,
   } = useAppStore();
 
   useEffect(() => {
@@ -61,8 +63,15 @@ export default function App() {
     return () => { unwatchDirectory().catch(() => {}); };
   }, [currentDir, leftTab]);
 
+  const activePhotos = useMemo(() => {
+    if (!selectedAlbumId) return photos;
+    const album = albums.find((a) => a.id === selectedAlbumId);
+    if (!album) return photos;
+    return photos.filter((p) => p.filePath.startsWith(album.path));
+  }, [photos, selectedAlbumId, albums]);
+
   const filteredPhotos = useMemo(() => {
-    return photos
+    return activePhotos
       .filter((p) => {
         if (filter.cameraModels.length > 0 && !filter.cameraModels.includes(p.cameraModel)) return false;
         if (filter.lensModels.length > 0 && !filter.lensModels.includes(p.lensModel)) return false;
@@ -91,7 +100,19 @@ export default function App() {
         }
         return 0;
       });
-  }, [photos, filter, sortBy, sortOrder]);
+  }, [activePhotos, filter, sortBy, sortOrder]);
+
+  // 持久化当前照片列表供 PhotoDetail 独立窗口使用
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("photolib-detail-photos", JSON.stringify(filteredPhotos.map((p) => p.id)));
+      } catch {
+        // 超大列表时可能配额不足，忽略即可
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [filteredPhotos]);
 
   return (
     <div className="h-full flex flex-col bg-surface-0 dark:bg-surface-0 text-surface-900 dark:text-surface-100 relative">
@@ -128,7 +149,7 @@ export default function App() {
         {rightPanelOpen && (
           <div className="w-72 shrink-0 bg-surface-50/80 dark:bg-surface-50/80 backdrop-blur-sm border-l border-surface-200/60 dark:border-surface-200/30 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto">
-              <FilterPanel />
+              <FilterPanel activePhotos={activePhotos} />
               <div className="border-t border-surface-200/40 dark:border-surface-200/20" />
               <MetadataPanel />
             </div>

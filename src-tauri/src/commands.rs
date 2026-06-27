@@ -777,10 +777,44 @@ pub(crate) fn build_enriched_skeleton(folder_path: &std::path::Path) -> anyhow::
         });
     }
 
-    // 一次 DB 查询：拿到这些 file_path 对应的缓存 EXIF
+    // 一次 DB 操作：确保所有文件有 DB 记录 → 获取真实自增 ID → 读取缓存的 EXIF
     if out.is_empty() { return Ok(out); }
     let conn = Connection::open(crate::db::get_db_path()).ok();
-    if let Some(conn) = conn {
+    if let Some(ref conn) = conn {
+        // Step 1: INSERT OR IGNORE — 确保每个文件都在 photos 表中有行
+        conn.execute_batch("PRAGMA journal_mode=WAL;").ok();
+        conn.execute_batch("BEGIN TRANSACTION;").ok();
+        for photo in &out {
+            conn.execute(
+                "INSERT OR IGNORE INTO photos (file_path, file_name, media_type) VALUES (?1, ?2, ?3)",
+                rusqlite::params![photo.file_path, photo.file_name, photo.media_type],
+            ).ok();
+        }
+        conn.execute_batch("COMMIT;").ok();
+
+        // Step 2: 获取真实自增 ID，替换 skeleton 的 hash ID
+        let id_placeholders = out.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let id_sql = format!("SELECT id, file_path FROM photos WHERE file_path IN ({})", id_placeholders);
+        if let Ok(mut id_stmt) = conn.prepare(&id_sql) {
+            let params: Vec<&dyn rusqlite::ToSql> = out.iter()
+                .map(|p| &p.file_path as &dyn rusqlite::ToSql)
+                .collect();
+            if let Ok(rows) = id_stmt.query_map(rusqlite::params_from_iter(params.iter().copied()), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            }) {
+                let id_by_path: HashMap<String, i64> = rows
+                    .filter_map(|r| r.ok())
+                    .map(|(id, path)| (path, id))
+                    .collect();
+                for p in out.iter_mut() {
+                    if let Some(&real_id) = id_by_path.get(&p.file_path) {
+                        p.id = real_id;
+                    }
+                }
+            }
+        }
+
+        // Step 3: 一次 DB 查询：拿到这些 file_path 对应的缓存 EXIF
         let placeholders = out.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT file_path, file_size, file_date,
@@ -972,8 +1006,32 @@ async fn open_directory_background(
 
     // emit "meta-loaded" 事件（file_size + file_date）
     if !entries.is_empty() {
+        // 查询 DB 获取真实自增 ID（替换 xxhash）
+        let db_path_for_ids = db_path.clone();
+        let paths_for_ids: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+        let id_map: std::collections::HashMap<String, i64> = tokio::task::spawn_blocking(move || {
+            let mut map = std::collections::HashMap::new();
+            if let Ok(conn) = Connection::open(&db_path_for_ids) {
+                let placeholders = paths_for_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!("SELECT id, file_path FROM photos WHERE file_path IN ({})", placeholders);
+                if let Ok(mut stmt) = conn.prepare(&sql) {
+                    let params: Vec<&dyn rusqlite::ToSql> = paths_for_ids.iter()
+                        .map(|p| p as &dyn rusqlite::ToSql)
+                        .collect();
+                    if let Ok(rows) = stmt.query_map(rusqlite::params_from_iter(params.iter().copied()), |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    }) {
+                        for r in rows.flatten() {
+                            map.insert(r.1, r.0);
+                        }
+                    }
+                }
+            }
+            map
+        }).await.unwrap_or_default();
+
         let meta_patches: Vec<serde_json::Value> = entries.iter().map(|e| {
-            let id = xxhash_rust::xxh3::xxh3_64(e.path.as_bytes()) as i64;
+            let id = id_map.get(&e.path).copied().unwrap_or(0);
             serde_json::json!({
                 "id": id,
                 "filePath": e.path,

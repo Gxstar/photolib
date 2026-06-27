@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useAppStore } from "../../stores/appStore";
+import type { Photo } from "../../types";
 import { RotateCcw, SlidersHorizontal, ChevronDown, Star, Flag, Camera, Settings2 } from "lucide-react";
 
 const labelColors: Record<string, string> = {
@@ -11,18 +12,19 @@ const labelNames: Record<string, string> = {
   red: "红", blue: "蓝", green: "绿", yellow: "黄", purple: "紫",
 };
 
-export function FilterPanel() {
+export function FilterPanel({ activePhotos }: { activePhotos?: Photo[] }) {
   const { filter, setFilter, resetFilter, photos } = useAppStore();
+  const sourcePhotos = activePhotos ?? photos;
 
   const { cameraModels, lensModels } = useMemo(() => {
-    const cams = [...new Set(photos.map(p => p.cameraModel).filter(Boolean))].sort();
-    const lenses = [...new Set(photos.map(p => p.lensModel).filter(Boolean))].sort();
+    const cams = [...new Set(sourcePhotos.map(p => p.cameraModel).filter(Boolean))].sort();
+    const lenses = [...new Set(sourcePhotos.map(p => p.lensModel).filter(Boolean))].sort();
     return { cameraModels: cams, lensModels: lenses };
-  }, [photos]);
+  }, [sourcePhotos]);
 
-  const maxIso = Math.max(...photos.map((p) => p.iso), 25600);
-  const maxFocal = Math.max(...photos.map((p) => p.focalLength), 400);
-  const maxAperture = Math.max(...photos.map((p) => p.aperture), 32);
+  const maxIso = Math.max(...sourcePhotos.map((p) => p.iso), 25600);
+  const maxFocal = Math.max(...sourcePhotos.map((p) => p.focalLength), 400);
+  const maxAperture = Math.max(...sourcePhotos.map((p) => p.aperture), 32);
 
   const hasActiveFilter =
     filter.cameraModels.length > 0 ||

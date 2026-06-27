@@ -99,13 +99,7 @@ export function Toolbar() {
     <div className="flex items-center gap-2 h-12 px-3 glass-panel shrink-0 relative z-10">
       {/* App brand */}
       <div className="flex items-center gap-2.5 mr-2">
-        <div className="w-7 h-7 rounded-xl bg-accent-500 flex items-center justify-center shadow-sm shadow-accent-500/20">
-          <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-          </svg>
-        </div>
+        <img src="/app-icon.png" alt="PhotoLib" className="w-7 h-7 rounded-xl object-cover shadow-sm shadow-accent-500/20" />
         <span className="text-sm font-semibold text-accent-600 dark:text-accent-400 tracking-tight hidden sm:inline">PhotoLib</span>
       </div>
 

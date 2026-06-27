@@ -43,6 +43,7 @@ export function LeftPanel() {
     setLoading,
     albums,
     setAlbums,
+    selectedAlbumId,
     setSelectedAlbumId,
     setCurrentFolder,
   } = useAppStore();
@@ -204,15 +205,19 @@ export function LeftPanel() {
     }
   }, [setPhotos, setLoading, setError]);
 
+  // Tab switching: clear cross-tab state
+  useEffect(() => {
+    setSelectedAlbumId(null);
+  }, [leftTab, setSelectedAlbumId]);
+
   // Album tab activation: load photos + album list, clear dir state
   useEffect(() => {
     if (leftTab !== "album") return;
     setCurrentDir("");
     setCurrentFolder("总相册");
-    setSelectedAlbumId(null);
     loadAllAlbumPhotos();
     loadAlbums();
-  }, [leftTab, loadAllAlbumPhotos, loadAlbums, setCurrentDir, setCurrentFolder, setSelectedAlbumId]);
+  }, [leftTab, loadAllAlbumPhotos, loadAlbums, setCurrentDir, setCurrentFolder]);
 
   const refreshAlbumPhotos = useCallback(async () => {
     await loadAllAlbumPhotos();
@@ -277,6 +282,8 @@ export function LeftPanel() {
           <AlbumManager
             albums={albums}
             albumExpanded={albumExpanded}
+            selectedId={selectedAlbumId}
+            onSelect={(id) => setSelectedAlbumId(id !== null && selectedAlbumId === id ? null : id)}
             onToggleExpand={() => setAlbumExpanded((v) => !v)}
             onAdd={handleAddAlbum}
             onRemove={handleRemoveAlbum}
@@ -437,12 +444,16 @@ function expandWithChildren(nodes: TreeNode[], targetPath: string, children: Tre
 export function AlbumManager({
   albums,
   albumExpanded,
+  selectedId,
+  onSelect,
   onToggleExpand,
   onAdd,
   onRemove,
 }: {
   albums: { id: number; path: string; displayName?: string; photoCount?: number }[];
   albumExpanded: boolean;
+  selectedId: number | null;
+  onSelect: (id: number | null) => void;
   onToggleExpand: () => void;
   onAdd: () => void;
   onRemove: (id: number, e: React.MouseEvent) => void;
@@ -457,28 +468,51 @@ export function AlbumManager({
         onClick={onToggleExpand}
       >
         <BookImage size={16} className="text-accent-500 shrink-0" />
-        <span className="flex-1 text-sm font-medium text-surface-700 dark:text-surface-300">总相册</span>
-        <span className="text-2xs text-surface-400 tabular-nums font-medium">{totalPhotos} 张</span>
+        <span className="flex-1 text-sm font-medium text-surface-700 dark:text-surface-300">相册</span>
         <ChevronDown size={14} className={`text-surface-400 transition-transform ${albumExpanded ? "" : "-rotate-90"}`} />
       </div>
 
       {/* Directory list — conditionally visible */}
       {albumExpanded && (
         <div className="flex-1 overflow-auto py-1.5 px-1.5 space-y-0.5">
+          {/* Show all button */}
+          <div
+            onClick={() => onSelect(null)}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs cursor-pointer select-none transition-all ${
+              selectedId === null
+                ? "bg-accent-500/10 text-accent-700 dark:text-accent-300"
+                : "text-surface-600 dark:text-surface-400 hover:bg-surface-100/60 dark:hover:bg-surface-100/30"
+            }`}
+            style={{ paddingLeft: 8 + 16 }}>
+            <BookImage size={15} className="shrink-0" />
+            <span className="flex-1 truncate">全部相册</span>
+            <span className="text-2xs shrink-0 tabular-nums font-medium">{totalPhotos}</span>
+          </div>
+
           {albums.length > 0 ? (
-            albums.map((album) => (
-              <div key={album.id}
-                className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs group text-surface-600 dark:text-surface-400"
-                style={{ paddingLeft: 8 + 16 }}>
-                <Folder size={15} className="text-surface-400 shrink-0" />
-                <span className="flex-1 truncate">{album.displayName || album.path}</span>
-                <span className="text-2xs text-surface-400 shrink-0 tabular-nums font-medium">{album.photoCount || 0}</span>
-                <button onClick={(e) => onRemove(album.id, e)}
-                  className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 text-surface-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all shrink-0">
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))
+            albums.map((album) => {
+              const isSelected = selectedId === album.id;
+              return (
+                <div key={album.id}
+                  onClick={() => onSelect(album.id)}
+                  className={`relative flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs group cursor-pointer select-none transition-all ${
+                    isSelected
+                      ? "bg-accent-500/10 text-accent-700 dark:text-accent-300"
+                      : "text-surface-600 dark:text-surface-400 hover:bg-surface-100/60 dark:hover:bg-surface-100/30"
+                  }`}
+                  style={{ paddingLeft: 8 + 16 }}>
+                  <Folder size={15} className="shrink-0" />
+                  <span className="flex-1 truncate">{album.displayName || album.path}</span>
+                  <div className="relative w-6 h-6 shrink-0 flex items-center justify-center">
+                    <span className="text-2xs tabular-nums font-medium group-hover:opacity-0 transition-opacity">{album.photoCount || 0}</span>
+                    <button onClick={(e) => onRemove(album.id, e)}
+                      className="absolute inset-0 flex items-center justify-center rounded-lg opacity-0 group-hover:opacity-100 text-surface-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all pointer-events-none group-hover:pointer-events-auto">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
           ) : (
             <div className="flex flex-col items-center justify-center py-8 gap-3 text-surface-400">
               <div className="w-10 h-10 rounded-xl bg-surface-100/60 dark:bg-surface-100/30 flex items-center justify-center">

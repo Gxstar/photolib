@@ -30,6 +30,8 @@ describe("AlbumManager", () => {
   const defaultProps = {
     albums: defaultAlbums,
     albumExpanded: true,
+    selectedId: null,
+    onSelect: vi.fn(),
     onToggleExpand: vi.fn(),
     onAdd: vi.fn(),
     onRemove: vi.fn(),
@@ -39,10 +41,11 @@ describe("AlbumManager", () => {
     vi.clearAllMocks();
   });
 
-  it("renders album header with total photo count", () => {
+  it("renders album header and show-all row", () => {
     render(<AlbumManager {...defaultProps} />);
-    expect(screen.getByText("总相册")).toBeTruthy();
-    expect(screen.getByText("350 张")).toBeTruthy();
+    expect(screen.getByText("相册")).toBeTruthy();
+    expect(screen.getByText("全部相册")).toBeTruthy();
+    expect(screen.getByText("350")).toBeTruthy();
   });
 
   it("renders directory rows when expanded", () => {
@@ -57,12 +60,13 @@ describe("AlbumManager", () => {
     render(<AlbumManager {...defaultProps} albumExpanded={false} />);
     expect(screen.queryByText("2025")).toBeNull();
     expect(screen.queryByText("2024")).toBeNull();
+    expect(screen.queryByText("全部相册")).toBeNull();
   });
 
   it("calls onToggleExpand when album header is clicked", () => {
     const onToggleExpand = vi.fn();
     render(<AlbumManager {...defaultProps} onToggleExpand={onToggleExpand} />);
-    fireEvent.click(screen.getByText("总相册"));
+    fireEvent.click(screen.getByText("相册"));
     expect(onToggleExpand).toHaveBeenCalledTimes(1);
   });
 
@@ -94,5 +98,34 @@ describe("AlbumManager", () => {
     const addButtons = screen.getAllByText("添加文件夹");
     fireEvent.click(addButtons[addButtons.length - 1].closest("button")!);
     expect(onAdd).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onSelect(null) when 全部相册 is clicked", () => {
+    const onSelect = vi.fn();
+    render(<AlbumManager {...defaultProps} onSelect={onSelect} />);
+    fireEvent.click(screen.getByText("全部相册"));
+    expect(onSelect).toHaveBeenCalledWith(null);
+  });
+
+  it("calls onSelect with album id when a directory row is clicked", () => {
+    const onSelect = vi.fn();
+    render(<AlbumManager {...defaultProps} onSelect={onSelect} />);
+    fireEvent.click(screen.getByText("2025"));
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+
+  it("applies selected styles to 全部相册 when selectedId is null", () => {
+    const { container } = render(<AlbumManager {...defaultProps} selectedId={null} />);
+    const rows = container.querySelectorAll<HTMLDivElement>(".flex.items-center.gap-2\\.5");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.className).toContain("bg-accent-500/10");
+  });
+
+  it("applies selected styles to a folder row when selectedId matches", () => {
+    const { container } = render(<AlbumManager {...defaultProps} selectedId={1} />);
+    const rows = container.querySelectorAll<HTMLDivElement>(".flex.items-center.gap-2\\.5");
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows[0]?.className).not.toContain("bg-accent-500/10");
+    expect(rows[1]?.className).toContain("bg-accent-500/10");
   });
 });
