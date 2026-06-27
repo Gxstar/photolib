@@ -53,11 +53,11 @@ function ExifTable({ photo }: { photo: Photo }) {
   ].filter(([, v]) => v) as [string, string][];
 
   return (
-    <div className="divide-y divide-white/5">
+    <div className="divide-y divide-surface-200 dark:divide-white/5">
       {rows.map(([label, value]) => (
         <div key={label} className="py-1.5">
-          <p className="text-2xs text-white/30">{label}</p>
-          <p className="text-xs text-white/80 break-all">{value}</p>
+          <p className="text-2xs text-surface-600 dark:text-white/30">{label}</p>
+          <p className="text-xs text-surface-700 dark:text-white/80 break-all">{value}</p>
         </div>
       ))}
     </div>
@@ -76,7 +76,7 @@ function RatingStars({
       {[1, 2, 3, 4, 5].map((star) => (
         <button key={star} onClick={() => onChange(star === value ? 0 : star)}
           className="p-0.5 transition-colors hover:scale-110">
-          <svg className={`w-5 h-5 ${star <= value ? "text-yellow-400 fill-yellow-400" : "text-white/20 fill-none"}`}
+          <svg className={`w-5 h-5 ${star <= value ? "text-yellow-400 fill-yellow-400" : "text-surface-400 dark:text-white/20 fill-none"}`}
             viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
             <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26" />
           </svg>
@@ -98,14 +98,14 @@ function ColorButtons({
     <div className="flex gap-2 items-center">
       {colors.map((c) => (
         <button key={c} onClick={() => onChange(value === c ? "" : c)}
-          className={`w-6 h-6 rounded-full transition-all border-2 ${
-            value === c ? "border-white scale-110" : "border-transparent"
-          }`}
+            className={`w-6 h-6 rounded-full transition-all border-2 ${
+              value === c ? "border-surface-800 dark:border-white scale-110" : "border-transparent"
+            }`}
           style={{ backgroundColor: colorLabelMap[c] }}
         />
       ))}
       {value && (
-        <button onClick={() => onChange("")} className="text-2xs text-white/40 hover:text-white/70 ml-1">
+        <button onClick={() => onChange("")} className="text-2xs text-surface-600 dark:text-white/40 hover:text-surface-800 dark:hover:text-white/70 ml-1">
           清除
         </button>
       )}
@@ -126,7 +126,7 @@ function FlagButtons({
         className={`px-3 py-1 rounded-full text-xs transition-all ${
           value === "pick"
             ? "bg-green-500 text-white"
-            : "bg-white/10 text-white/50 hover:bg-white/20"
+            : "bg-surface-200/40 dark:bg-white/10 text-surface-600 dark:text-white/50 hover:bg-surface-200/60 dark:hover:bg-white/20"
         }`}>
         ✓ 精选
       </button>
@@ -134,7 +134,7 @@ function FlagButtons({
         className={`px-3 py-1 rounded-full text-xs transition-all ${
           value === "reject"
             ? "bg-red-500 text-white"
-            : "bg-white/10 text-white/50 hover:bg-white/20"
+            : "bg-surface-200/40 dark:bg-white/10 text-surface-600 dark:text-white/50 hover:bg-surface-200/60 dark:hover:bg-white/20"
         }`}>
         ✗ 排除
       </button>
@@ -175,9 +175,38 @@ export function PhotoDetail() {
     [allPhotos, photoId],
   );
 
-  // Load all photos on mount
+  // 从 localStorage 加载照片列表（浏览上下文），支持 ID 数组（新格式）和完整对象（旧格式）
   useEffect(() => {
     if (!isTauri()) return;
+    try {
+      const stored = localStorage.getItem("photolib-detail-photos");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (typeof parsed[0] === "number") {
+            // 新格式：ID 数组，通过 getAllPhotos 获取完整数据并按 ID 顺序重排
+            getAllPhotos()
+              .then((list) => {
+                const idSet = new Set(parsed);
+                // 保留过滤后的列表，按原始 ID 顺序排列
+                const ordered = parsed
+                  .map((id: number) => list.find((p) => p.id === id))
+                  .filter(Boolean) as Photo[];
+                setAllPhotos(ordered);
+                setLoading(false);
+              })
+              .catch(() => setLoading(false));
+            return;
+          }
+          // 旧格式：完整 Photo 对象，直接使用
+          setAllPhotos(parsed as Photo[]);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch {
+      // ignore parse errors, fall through
+    }
     getAllPhotos()
       .then((list) => {
         setAllPhotos(list);
@@ -301,7 +330,7 @@ export function PhotoDetail() {
 
   if (loading) {
     return (
-      <div className="h-full bg-surface-950 flex items-center justify-center text-white/40 text-sm">
+      <div className="h-full bg-surface-0 flex items-center justify-center text-surface-600 dark:text-white/40 text-sm">
         加载中...
       </div>
     );
@@ -309,10 +338,10 @@ export function PhotoDetail() {
 
   if (!currentPhoto) {
     return (
-      <div className="h-full bg-surface-950 flex flex-col items-center justify-center gap-4 text-white/40 text-sm">
+      <div className="h-full bg-surface-0 flex flex-col items-center justify-center gap-4 text-surface-600 dark:text-white/40 text-sm">
         <span>照片不存在</span>
         <button onClick={() => getCurrentWindow().close().catch(() => {})}
-          className="px-4 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors">
+          className="px-4 py-2 bg-surface-200/40 dark:bg-white/10 rounded-lg hover:bg-surface-200/60 dark:hover:bg-white/20 transition-colors">
           关闭
         </button>
       </div>
@@ -320,22 +349,22 @@ export function PhotoDetail() {
   }
 
   return (
-    <div className="h-full bg-surface-950 flex flex-col text-white">
+    <div className="h-full bg-surface-0 flex flex-col text-surface-700 dark:text-white/80">
       {/* Top toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2.5 shrink-0 border-b border-white/5">
+      <div className="flex items-center gap-3 px-4 py-2.5 shrink-0 border-b border-surface-200/40 dark:border-white/5">
         <button onClick={() => getCurrentWindow().close().catch(() => {})}
-          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
+          className="p-1.5 rounded-lg hover:bg-surface-200/30 dark:hover:bg-white/10 transition-colors">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <span className="text-sm text-white/80 truncate flex-1">{currentPhoto.fileName}</span>
+        <span className="text-sm text-surface-700 dark:text-white/80 truncate flex-1">{currentPhoto.fileName}</span>
         <button onClick={() => setRotation((r) => r - 90)}
-          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="逆时针旋转 (R)">
+          className="p-1.5 rounded-lg hover:bg-surface-200/30 dark:hover:bg-white/10 transition-colors" title="逆时针旋转 (R)">
           <RotateCcw size={16} />
         </button>
         <button onClick={() => setRotation((r) => r + 90)}
-          className="p-1.5 rounded-lg hover:bg-white/10 transition-colors" title="顺时针旋转 (Shift+R)">
+          className="p-1.5 rounded-lg hover:bg-surface-200/30 dark:hover:bg-white/10 transition-colors" title="顺时针旋转 (Shift+R)">
           <RotateCw size={16} />
         </button>
       </div>
@@ -343,7 +372,7 @@ export function PhotoDetail() {
       {/* Main content: image + side panel */}
       <div className="flex-1 flex overflow-hidden">
         {/* Image area */}
-        <div className="flex-1 flex items-center justify-center overflow-hidden p-4">
+        <div className="flex-1 flex items-center justify-center overflow-hidden p-4 bg-black">
           <TransformWrapper
             minScale={1}
             maxScale={8}
@@ -365,35 +394,35 @@ export function PhotoDetail() {
         </div>
 
         {/* Side panel — EXIF + edit */}
-        <div className="w-[360px] shrink-0 border-l border-white/5 overflow-y-auto bg-surface-900/80 backdrop-blur-xl">
+        <div className="w-[360px] shrink-0 border-l border-surface-200/40 dark:border-white/5 overflow-y-auto bg-surface-100 dark:bg-surface-100/80 backdrop-blur-xl">
           <div className="p-4 space-y-5">
             <section>
-              <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-2">EXIF 信息</h3>
+              <h3 className="text-xs font-semibold text-surface-600 dark:text-white/40 uppercase tracking-wider mb-2">EXIF 信息</h3>
               <ExifTable photo={currentPhoto} />
             </section>
 
-            <section className="border-t border-white/5 pt-4">
-              <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-3">标记与评分</h3>
+            <section className="border-t border-surface-200/40 dark:border-white/5 pt-4">
+              <h3 className="text-xs font-semibold text-surface-600 dark:text-white/40 uppercase tracking-wider mb-3">标记与评分</h3>
               <div className="space-y-4">
                 <div>
-                  <p className="text-2xs text-white/30 mb-1.5">评分</p>
+                  <p className="text-2xs text-surface-600 dark:text-white/30 mb-1.5">评分</p>
                   <RatingStars value={rating} onChange={setRating} />
                 </div>
                 <div>
-                  <p className="text-2xs text-white/30 mb-1.5">颜色标签</p>
+                  <p className="text-2xs text-surface-600 dark:text-white/30 mb-1.5">颜色标签</p>
                   <ColorButtons value={colorLabel} onChange={setColorLabel} />
                 </div>
                 <div>
-                  <p className="text-2xs text-white/30 mb-1.5">旗标</p>
+                  <p className="text-2xs text-surface-600 dark:text-white/30 mb-1.5">旗标</p>
                   <FlagButtons value={flag} onChange={setFlag} />
                 </div>
                 <div>
-                  <p className="text-2xs text-white/30 mb-1.5">备注</p>
+                  <p className="text-2xs text-surface-600 dark:text-white/30 mb-1.5">备注</p>
                   <textarea
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     rows={4}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-xs text-white/80 resize-none focus:outline-none focus:border-white/20"
+                    className="w-full bg-surface-100/40 dark:bg-white/5 border border-surface-200/40 dark:border-white/10 rounded-lg p-2 text-xs text-surface-700 dark:text-white/80 resize-none focus:outline-none focus:border-surface-400 dark:focus:border-white/20"
                     placeholder="添加备注..."
                   />
                 </div>
@@ -404,19 +433,19 @@ export function PhotoDetail() {
       </div>
 
       {/* Bottom nav */}
-      <div className="flex items-center justify-center gap-4 px-4 py-2.5 shrink-0 border-t border-white/5">
+      <div className="flex items-center justify-center gap-4 px-4 py-2.5 shrink-0 border-t border-surface-200/40 dark:border-white/5">
         <button onClick={goPrev}
-          className="flex items-center gap-1 px-4 py-1.5 rounded-lg hover:bg-white/10 transition-colors text-xs text-white/60">
+          className="flex items-center gap-1 px-4 py-1.5 rounded-lg hover:bg-surface-200/30 dark:hover:bg-white/10 transition-colors text-xs text-surface-600 dark:text-white/60">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
           上一张
         </button>
-        <span className="text-xs text-white/40 tabular-nums">
+        <span className="text-xs text-surface-700 dark:text-white/40 tabular-nums">
           {currentIndex + 1} / {allPhotos.length}
         </span>
         <button onClick={goNext}
-          className="flex items-center gap-1 px-4 py-1.5 rounded-lg hover:bg-white/10 transition-colors text-xs text-white/60">
+          className="flex items-center gap-1 px-4 py-1.5 rounded-lg hover:bg-surface-200/30 dark:hover:bg-white/10 transition-colors text-xs text-surface-600 dark:text-white/60">
           下一张
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
