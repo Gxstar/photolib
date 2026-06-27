@@ -376,6 +376,7 @@ export function PhotoDetail() {
           <TransformWrapper
             minScale={1}
             maxScale={8}
+            smooth={false}
             doubleClick={{ mode: "zoomIn" }}
             wheel={{ step: 0.1 }}
             centerOnInit
